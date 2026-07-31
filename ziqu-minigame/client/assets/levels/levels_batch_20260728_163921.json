@@ -1,0 +1,2353 @@
+[
+  {
+    "id": "d3174089-196b-4390-bfcb-14e13bd2fe1a",
+    "type": "disassemble",
+    "difficulty": 2,
+    "title": "这个字由什么组成？",
+    "data": {
+      "char": "狗",
+      "radicals": [
+        "犭",
+        "句"
+      ],
+      "distractors": [
+        "⻊",
+        "王"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "5f776607-993b-40a8-b540-4c398af35a44",
+    "type": "compose",
+    "difficulty": 2,
+    "title": "把字拼回来",
+    "data": {
+      "parts": [
+        "周",
+        "讠"
+      ],
+      "answer": "调",
+      "hint": "读音：diào"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "e6c26565-bfb1-4852-9fff-3a8f03ceab42",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "错别字在哪里？",
+    "data": {
+      "text": "万事具备，只欠东风。",
+      "typos": [
+        {
+          "pos": 2,
+          "wrong": "具",
+          "correct": "俱"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "73eeb528-c515-4942-8840-7dd72ea0eb6d",
+    "type": "riddle",
+    "difficulty": 3,
+    "title": "国粹知识局",
+    "data": {
+      "question": "下列哪个成语的意思是\"见到有利可图就不顾道义\"？",
+      "options": [
+        "才高八斗",
+        "见利忘义",
+        "过河拆桥",
+        "冰天雪地"
+      ],
+      "answer": "B",
+      "explanation": "见利忘义（jiàn lì wàng yì）：见到有利可图就不顾道义例：做生意不可见利忘义。"
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "4d6a1dd9-0038-4235-a967-d82f42207b69",
+    "type": "disassemble",
+    "difficulty": 2,
+    "title": "把字拆开来",
+    "data": {
+      "char": "炮",
+      "radicals": [
+        "火",
+        "包"
+      ],
+      "distractors": [
+        "水",
+        "巴"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "e7a923c9-e1ac-4c9a-adb5-c5e8c0d04f2d",
+    "type": "compose",
+    "difficulty": 2,
+    "title": "把字拼回来",
+    "data": {
+      "parts": [
+        "戋",
+        "氵"
+      ],
+      "answer": "浅",
+      "hint": "读音：qiǎn"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "b6c3a272-1e23-4cd8-8357-2c2ecfa7950d",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "错别字在哪里？",
+    "data": {
+      "text": "散会后请大家立既回到岗位。",
+      "typos": [
+        {
+          "pos": 7,
+          "wrong": "既",
+          "correct": "即"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "7f0e4a5c-683d-400f-ae92-7e662acf2104",
+    "type": "riddle",
+    "difficulty": 4,
+    "title": "这题有点儿冷",
+    "data": {
+      "question": "\"基础打牢了，成绩的提升便____。\" 横线处应填哪个成语？",
+      "options": [
+        "锦上添花",
+        "水到渠成",
+        "足智多谋",
+        "守口如瓶"
+      ],
+      "answer": "B",
+      "explanation": "水到渠成（shuǐ dào qú chéng）：比喻条件成熟，事情自然会成功例：基础打牢了，成绩的提升便水到渠成。"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "a2f42432-a2ac-4e03-88eb-5a50a2749d98",
+    "type": "disassemble",
+    "difficulty": 1,
+    "title": "把字拆开来",
+    "data": {
+      "char": "字",
+      "radicals": [
+        "宀",
+        "子"
+      ],
+      "distractors": [
+        "囗",
+        "八",
+        "占"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "89ac61dc-769e-4be4-b143-5603ac57a5ef",
+    "type": "compose",
+    "difficulty": 2,
+    "title": "合体！汉字",
+    "data": {
+      "parts": [
+        "火",
+        "包"
+      ],
+      "answer": "炮",
+      "hint": "读音：pào"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "5be70dbf-7a7f-4e86-9733-d9173add099e",
+    "type": "typoFind",
+    "difficulty": 5,
+    "title": "一字之差",
+    "data": {
+      "text": "宴会上宾主谈笑风声，气氛融洽。大街上车辆穿流不息，热闹非凡。",
+      "typos": [
+        {
+          "pos": 8,
+          "wrong": "声",
+          "correct": "生"
+        },
+        {
+          "pos": 20,
+          "wrong": "穿",
+          "correct": "川"
+        }
+      ]
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "fcaa3a93-d0e8-4da7-9e47-0e7e0a56de1b",
+    "type": "riddle",
+    "difficulty": 4,
+    "title": "这题有点儿冷",
+    "data": {
+      "question": "\"工地上____，一片繁忙。\" 横线处应填哪个成语？",
+      "options": [
+        "兢兢业业",
+        "一见如故",
+        "精益求精",
+        "热火朝天"
+      ],
+      "answer": "D",
+      "explanation": "热火朝天（rè huǒ cháo tiān）：形容场面、情绪或气氛热烈高涨例：工地上热火朝天，一片繁忙。"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "66c3491a-20f1-43cd-8f44-2862ff67e8e3",
+    "type": "disassemble",
+    "difficulty": 1,
+    "title": "把字拆开来",
+    "data": {
+      "char": "早",
+      "radicals": [
+        "日",
+        "十"
+      ],
+      "distractors": [
+        "方",
+        "玉"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "d821bb2d-4a58-4cc0-a938-41d21228c593",
+    "type": "compose",
+    "difficulty": 2,
+    "title": "把字拼回来",
+    "data": {
+      "parts": [
+        "良",
+        "犭"
+      ],
+      "answer": "狼",
+      "hint": "读音：láng"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "87b2d4d5-ab05-4920-9a1b-cfe258aeae0f",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "一字之差",
+    "data": {
+      "text": "杭州西湖名符其实，风景如画。",
+      "typos": [
+        {
+          "pos": 5,
+          "wrong": "符",
+          "correct": "副"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "0c1f662a-78a8-477f-9194-2f7119fb59a1",
+    "type": "riddle",
+    "difficulty": 4,
+    "title": "这题有点儿冷",
+    "data": {
+      "question": "\"方案再漂亮不去落地，终究是____。\" 横线处应填哪个成语？",
+      "options": [
+        "欣欣向荣",
+        "欢天喜地",
+        "买椟还珠",
+        "纸上谈兵"
+      ],
+      "answer": "D",
+      "explanation": "纸上谈兵（zhǐ shàng tán bīng）：比喻空谈理论，不能解决实际问题例：方案再漂亮不去落地，终究是纸上谈兵。"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "ccff497a-3053-4ec2-bb27-4df711380ec2",
+    "type": "disassemble",
+    "difficulty": 2,
+    "title": "把字拆开来",
+    "data": {
+      "char": "侧",
+      "radicals": [
+        "亻",
+        "则"
+      ],
+      "distractors": [
+        "乘",
+        "己",
+        "忄"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "53a14c47-60c0-4017-a005-0d42e3240618",
+    "type": "compose",
+    "difficulty": 2,
+    "title": "字根拼拼乐",
+    "data": {
+      "parts": [
+        "且",
+        "女"
+      ],
+      "answer": "姐",
+      "hint": "读音：jiě"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "e1bd1649-0cdf-4a00-ab17-df4eefa02420",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "火眼金睛找错字",
+    "data": {
+      "text": "指挥中心重新布署了防汛工作。",
+      "typos": [
+        {
+          "pos": 6,
+          "wrong": "布",
+          "correct": "部"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "6d82879f-eb2d-439d-8120-297849ec9cae",
+    "type": "riddle",
+    "difficulty": 4,
+    "title": "国粹知识局",
+    "data": {
+      "question": "下列哪个成语的意思是\"喝水的时候想起水是从哪儿来的，比喻不忘本\"？",
+      "options": [
+        "黔驴技穷",
+        "饮水思源",
+        "一劳永逸",
+        "见利忘义"
+      ],
+      "answer": "B",
+      "explanation": "饮水思源（yǐn shuǐ sī yuán）：喝水的时候想起水是从哪儿来的，比喻不忘本例：功成名就后他饮水思源，回乡捐建了学校。"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "7ed08232-ae34-480a-9de7-f317ada30a72",
+    "type": "disassemble",
+    "difficulty": 1,
+    "title": "把字拆开来",
+    "data": {
+      "char": "尘",
+      "radicals": [
+        "小",
+        "土"
+      ],
+      "distractors": [
+        "君",
+        "昔",
+        "宀"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "b0896cfe-3d08-4d6c-a3a2-01c239b83a3d",
+    "type": "compose",
+    "difficulty": 4,
+    "title": "把字拼回来",
+    "data": {
+      "parts": [
+        "辰",
+        "雨"
+      ],
+      "answer": "震",
+      "hint": "读音：zhèn"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "e9f1236c-1cc4-4115-b6a0-6e726c3d4f5f",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "火眼金睛找错字",
+    "data": {
+      "text": "理论与实践相辅相承，缺一不可。",
+      "typos": [
+        {
+          "pos": 8,
+          "wrong": "承",
+          "correct": "成"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "e33fc200-08df-4a48-b9ff-e46c36e179ba",
+    "type": "riddle",
+    "difficulty": 4,
+    "title": "成语猜猜猜",
+    "data": {
+      "question": "下列哪个成语的意思是\"比喻坏事在一定条件下可以变为好事\"？",
+      "options": [
+        "大惊失色",
+        "兢兢业业",
+        "瞠目结舌",
+        "塞翁失马"
+      ],
+      "answer": "D",
+      "explanation": "塞翁失马（sài wēng shī mǎ）：比喻坏事在一定条件下可以变为好事例：这次落选让他沉心学习，塞翁失马，焉知非福。"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "e8a203e5-6832-4246-8ebd-711cab6a2f8e",
+    "type": "disassemble",
+    "difficulty": 1,
+    "title": "这个字由什么组成？",
+    "data": {
+      "char": "扫",
+      "radicals": [
+        "扌",
+        "彐"
+      ],
+      "distractors": [
+        "呙",
+        "厶"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "295a9b81-acc9-4a68-91cd-81f944bd0716",
+    "type": "compose",
+    "difficulty": 2,
+    "title": "字根拼拼乐",
+    "data": {
+      "parts": [
+        "合",
+        "手"
+      ],
+      "answer": "拿",
+      "hint": "读音：ná"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "f1c75483-fc10-4581-bddf-2afd6ee8b6b0",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "火眼金睛找错字",
+    "data": {
+      "text": "教室粉刷后换然一新。",
+      "typos": [
+        {
+          "pos": 5,
+          "wrong": "换",
+          "correct": "焕"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "55111e03-a747-40c4-8a0e-bb3763dc5eb3",
+    "type": "riddle",
+    "difficulty": 3,
+    "title": "国粹知识局",
+    "data": {
+      "question": "\"说起获奖经历，他顿时____。\" 横线处应填哪个成语？",
+      "options": [
+        "鹤立鸡群",
+        "眉飞色舞",
+        "草船借箭",
+        "见利忘义"
+      ],
+      "answer": "B",
+      "explanation": "眉飞色舞（méi fēi sè wǔ）：形容喜悦或得意的神态例：说起获奖经历，他顿时眉飞色舞。"
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "135c8b41-7476-4826-8f54-ab0a8e65d067",
+    "type": "disassemble",
+    "difficulty": 3,
+    "title": "这个字由什么组成？",
+    "data": {
+      "char": "理",
+      "radicals": [
+        "王",
+        "里"
+      ],
+      "distractors": [
+        "阿",
+        "完",
+        "垂"
+      ]
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "0b8ef3a6-4da6-4916-b7d9-e3ae8a9b8579",
+    "type": "compose",
+    "difficulty": 2,
+    "title": "合体！汉字",
+    "data": {
+      "parts": [
+        "台",
+        "女"
+      ],
+      "answer": "始",
+      "hint": "读音：shǐ"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "d980aca6-4815-485c-8dd4-db75076b5228",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "火眼金睛找错字",
+    "data": {
+      "text": "他成绩优异，在班里出类拔粹。",
+      "typos": [
+        {
+          "pos": 12,
+          "wrong": "粹",
+          "correct": "萃"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "7b57ab37-5133-4833-8d80-e870c4da000c",
+    "type": "riddle",
+    "difficulty": 3,
+    "title": "成语猜猜猜",
+    "data": {
+      "question": "\"做决定时____，反而错失良机。\" 横线处应填哪个成语？",
+      "options": [
+        "雪中送炭",
+        "守口如瓶",
+        "患得患失",
+        "画蛇添足"
+      ],
+      "answer": "C",
+      "explanation": "患得患失（huàn dé huàn shī）：形容对个人得失看得很重例：做决定时患得患失，反而错失良机。"
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "1df47a95-4307-409a-8be7-a8bf536a2cef",
+    "type": "disassemble",
+    "difficulty": 3,
+    "title": "这个字由什么组成？",
+    "data": {
+      "char": "鹅",
+      "radicals": [
+        "我",
+        "鸟"
+      ],
+      "distractors": [
+        "番",
+        "刃",
+        "车"
+      ]
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "b98f9f0d-a5b3-4d80-a743-80a0cffdf6d8",
+    "type": "compose",
+    "difficulty": 2,
+    "title": "合体！汉字",
+    "data": {
+      "parts": [
+        "今",
+        "心"
+      ],
+      "answer": "念",
+      "hint": "读音：niàn"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "d283b6fc-2690-42ff-b394-3ed832945965",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "一字之差",
+    "data": {
+      "text": "他成绩优异，在班里出类拔粹。",
+      "typos": [
+        {
+          "pos": 12,
+          "wrong": "粹",
+          "correct": "萃"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "f0f10ad9-d992-42d2-8a52-e79e28f60ea0",
+    "type": "riddle",
+    "difficulty": 4,
+    "title": "国粹知识局",
+    "data": {
+      "question": "下列哪个成语的意思是\"形容草木长得茂盛，比喻事业蓬勃发展\"？",
+      "options": [
+        "欣欣向荣",
+        "对牛弹琴",
+        "硕果累累",
+        "拾金不昧"
+      ],
+      "answer": "A",
+      "explanation": "欣欣向荣（xīn xīn xiàng róng）：形容草木长得茂盛，比喻事业蓬勃发展例：开发区各项事业欣欣向荣。"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "e662e5a9-e232-489b-b663-b7293aeadc6a",
+    "type": "disassemble",
+    "difficulty": 4,
+    "title": "庖丁解字",
+    "data": {
+      "char": "睛",
+      "radicals": [
+        "目",
+        "青"
+      ],
+      "distractors": [
+        "帛",
+        "木",
+        "之"
+      ]
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "115ba5ab-f58b-403e-a5e5-a70130c2e9e8",
+    "type": "compose",
+    "difficulty": 1,
+    "title": "字根拼拼乐",
+    "data": {
+      "parts": [
+        "女",
+        "子"
+      ],
+      "answer": "好",
+      "hint": "读音：hǎo"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "2a130bf2-10c5-44d1-afa2-16ca6691250b",
+    "type": "typoFind",
+    "difficulty": 5,
+    "title": "一字之差",
+    "data": {
+      "text": "散会后请大家立既回到岗位。他在车站等侯了整整两个小时。",
+      "typos": [
+        {
+          "pos": 7,
+          "wrong": "既",
+          "correct": "即"
+        },
+        {
+          "pos": 18,
+          "wrong": "侯",
+          "correct": "候"
+        }
+      ]
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "f8fdccbd-da9c-4e2b-98a3-c86fe3ca37f2",
+    "type": "riddle",
+    "difficulty": 3,
+    "title": "成语猜猜猜",
+    "data": {
+      "question": "\"庙会上游人____。\" 横线处应填哪个成语？",
+      "options": [
+        "万紫千红",
+        "忘恩负义",
+        "深谋远虑",
+        "摩肩接踵"
+      ],
+      "answer": "D",
+      "explanation": "摩肩接踵（mó jiān jiē zhǒng）：形容人多拥挤例：庙会上游人摩肩接踵。"
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "7a55b8f5-95bb-4736-a8c0-4298a1dab5e3",
+    "type": "disassemble",
+    "difficulty": 1,
+    "title": "这个字由什么组成？",
+    "data": {
+      "char": "打",
+      "radicals": [
+        "扌",
+        "丁"
+      ],
+      "distractors": [
+        "乎",
+        "乃"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "ac89b33f-4536-4815-a36c-1ef415eef9f7",
+    "type": "compose",
+    "difficulty": 2,
+    "title": "把字拼回来",
+    "data": {
+      "parts": [
+        "氵",
+        "先"
+      ],
+      "answer": "洗",
+      "hint": "读音：xǐ"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "d89938db-680e-4a7e-ad8a-eb4b341055b9",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "错别字在哪里？",
+    "data": {
+      "text": "有话就直接了当地说出来吧。",
+      "typos": [
+        {
+          "pos": 4,
+          "wrong": "接",
+          "correct": "截"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "420262ce-3fc0-4f84-8a57-aa85322c9fa6",
+    "type": "riddle",
+    "difficulty": 4,
+    "title": "成语猜猜猜",
+    "data": {
+      "question": "下列哪个成语的意思是\"比喻出了问题以后及时补救，还不算晚\"？",
+      "options": [
+        "亲密无间",
+        "情同手足",
+        "半途而废",
+        "亡羊补牢"
+      ],
+      "answer": "D",
+      "explanation": "亡羊补牢（wáng yáng bǔ láo）：比喻出了问题以后及时补救，还不算晚例：发现漏洞后立即修复，亡羊补牢，为时未晚。"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "bb6989f7-12c0-40d0-999e-80dc4b496b23",
+    "type": "disassemble",
+    "difficulty": 2,
+    "title": "把字拆开来",
+    "data": {
+      "char": "拉",
+      "radicals": [
+        "扌",
+        "立"
+      ],
+      "distractors": [
+        "米",
+        "兑"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "927359ff-af3f-42ef-971b-57bb2c25a264",
+    "type": "compose",
+    "difficulty": 2,
+    "title": "把字拼回来",
+    "data": {
+      "parts": [
+        "台",
+        "女"
+      ],
+      "answer": "始",
+      "hint": "读音：shǐ"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "fea07541-0ee8-4731-bcc0-41ce07b46135",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "错别字在哪里？",
+    "data": {
+      "text": "他不但不收敛，反而变本加利。",
+      "typos": [
+        {
+          "pos": 12,
+          "wrong": "利",
+          "correct": "厉"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "42c91a39-dec4-4bca-ab7a-52217d3e5b21",
+    "type": "riddle",
+    "difficulty": 4,
+    "title": "成语猜猜猜",
+    "data": {
+      "question": "下列哪个成语的意思是\"形容行人、车马等像水流一样连续不断\"？",
+      "options": [
+        "川流不息",
+        "井底之蛙",
+        "余音绕梁",
+        "一帆风顺"
+      ],
+      "answer": "A",
+      "explanation": "川流不息（chuān liú bù xī）：形容行人、车马等像水流一样连续不断例：高峰期的大桥上车辆川流不息。"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "e7500de1-f898-4bd6-9dc8-11968674eefa",
+    "type": "disassemble",
+    "difficulty": 2,
+    "title": "这个字由什么组成？",
+    "data": {
+      "char": "利",
+      "radicals": [
+        "禾",
+        "刂"
+      ],
+      "distractors": [
+        "交",
+        "垂",
+        "干"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "f4d6586a-5081-4ba2-8520-4940c086d024",
+    "type": "compose",
+    "difficulty": 1,
+    "title": "把字拼回来",
+    "data": {
+      "parts": [
+        "巴",
+        "扌"
+      ],
+      "answer": "把",
+      "hint": "读音：bǎ"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "aabb3189-5afb-486e-a95e-5409584ce7ce",
+    "type": "typoFind",
+    "difficulty": 5,
+    "title": "错别字在哪里？",
+    "data": {
+      "text": "听到开饭，弟弟迫不急待地冲向餐桌。理论与实践相辅相承，缺一不可。",
+      "typos": [
+        {
+          "pos": 9,
+          "wrong": "急",
+          "correct": "及"
+        },
+        {
+          "pos": 25,
+          "wrong": "承",
+          "correct": "成"
+        }
+      ]
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "64d34dc6-d7d5-4580-a8cf-888c5c56bd99",
+    "type": "riddle",
+    "difficulty": 4,
+    "title": "这题有点儿冷",
+    "data": {
+      "question": "\"学外语最忌____。\" 横线处应填哪个成语？",
+      "options": [
+        "半途而废",
+        "邯郸学步",
+        "拾金不昧",
+        "掷地有声"
+      ],
+      "answer": "A",
+      "explanation": "半途而废（bàn tú ér fèi）：指做事不能坚持到底，中途停顿，有始无终例：学外语最忌半途而废。"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "c1c39ff5-addd-4bc6-bb56-915238f6bd7c",
+    "type": "disassemble",
+    "difficulty": 5,
+    "title": "这个字由什么组成？",
+    "data": {
+      "char": "福",
+      "radicals": [
+        "礻",
+        "畐"
+      ],
+      "distractors": [
+        "今",
+        "八",
+        "间",
+        "斗"
+      ]
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "b9550a85-e798-4cf1-9cfc-fed1a9a94b0f",
+    "type": "compose",
+    "difficulty": 1,
+    "title": "把字拼回来",
+    "data": {
+      "parts": [
+        "仑",
+        "讠"
+      ],
+      "answer": "论",
+      "hint": "读音：lùn"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "8c2de314-3c64-4b16-bfe5-f4213235bd9d",
+    "type": "typoFind",
+    "difficulty": 5,
+    "title": "火眼金睛找错字",
+    "data": {
+      "text": "老先生已经病入膏盲，医生也无能为力。那家公司因造假而声名狼籍。",
+      "typos": [
+        {
+          "pos": 8,
+          "wrong": "盲",
+          "correct": "肓"
+        },
+        {
+          "pos": 29,
+          "wrong": "籍",
+          "correct": "藉"
+        }
+      ]
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "d55e9987-4046-4dad-b10b-4b7dc0346c40",
+    "type": "riddle",
+    "difficulty": 3,
+    "title": "国粹知识局",
+    "data": {
+      "question": "下列哪个成语的意思是\"比喻自己说话做事前后抵触\"？",
+      "options": [
+        "夜以继日",
+        "水滴石穿",
+        "自相矛盾",
+        "望穿秋水"
+      ],
+      "answer": "C",
+      "explanation": "自相矛盾（zì xiāng máo dùn）：比喻自己说话做事前后抵触例：他上午说涨价下午又说降价，简直自相矛盾。"
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "f85f359f-b078-48d1-b0c6-9714bf4f716f",
+    "type": "disassemble",
+    "difficulty": 2,
+    "title": "这个字由什么组成？",
+    "data": {
+      "char": "把",
+      "radicals": [
+        "扌",
+        "巴"
+      ],
+      "distractors": [
+        "扁",
+        "车",
+        "囗"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "0dbb7973-d76e-4fb6-b092-e2626c2ec0e0",
+    "type": "compose",
+    "difficulty": 2,
+    "title": "字根拼拼乐",
+    "data": {
+      "parts": [
+        "氐",
+        "广"
+      ],
+      "answer": "底",
+      "hint": "读音：dǐ"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "03454c89-6827-4c93-939b-48d8741249a3",
+    "type": "typoFind",
+    "difficulty": 3,
+    "title": "错别字在哪里？",
+    "data": {
+      "text": "工作要按步就班地推进，不可急躁。",
+      "typos": [
+        {
+          "pos": 4,
+          "wrong": "步",
+          "correct": "部"
+        }
+      ]
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "d9b4628f-8107-4630-96d6-e8525caa4f80",
+    "type": "riddle",
+    "difficulty": 4,
+    "title": "成语猜猜猜",
+    "data": {
+      "question": "下列哪个成语的意思是\"比喻拘泥成法，不知道随情况变化而变通\"？",
+      "options": [
+        "咫尺天涯",
+        "日理万机",
+        "刻舟求剑",
+        "言简意赅"
+      ],
+      "answer": "C",
+      "explanation": "刻舟求剑（kè zhōu qiú jiàn）：比喻拘泥成法，不知道随情况变化而变通例：市场早变了还照搬老办法，无异于刻舟求剑。"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "0e28b34a-f895-4751-8669-20b7261e8ef9",
+    "type": "disassemble",
+    "difficulty": 2,
+    "title": "把字拆开来",
+    "data": {
+      "char": "泪",
+      "radicals": [
+        "氵",
+        "目"
+      ],
+      "distractors": [
+        "才",
+        "亡"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "f74723ab-97df-4ca8-8cd6-fa204aa08d27",
+    "type": "compose",
+    "difficulty": 2,
+    "title": "合体！汉字",
+    "data": {
+      "parts": [
+        "欠",
+        "斤"
+      ],
+      "answer": "欣",
+      "hint": "读音：xīn"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "34ff745a-0eb1-4f77-bc49-70e682c984a6",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "错别字在哪里？",
+    "data": {
+      "text": "杭州西湖名符其实，风景如画。",
+      "typos": [
+        {
+          "pos": 5,
+          "wrong": "符",
+          "correct": "副"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "8ef09ad5-53f6-4232-a345-d89c122a1be8",
+    "type": "riddle",
+    "difficulty": 3,
+    "title": "这题有点儿冷",
+    "data": {
+      "question": "\"村民们____迎新年。\" 横线处应填哪个成语？",
+      "options": [
+        "守口如瓶",
+        "博古通今",
+        "镇定自若",
+        "欢天喜地"
+      ],
+      "answer": "D",
+      "explanation": "欢天喜地（huān tiān xǐ dì）：形容非常欢喜例：村民们欢天喜地迎新年。"
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "8df981d5-7bf1-4a01-9c1b-82d6ea7e04a0",
+    "type": "disassemble",
+    "difficulty": 2,
+    "title": "这个字由什么组成？",
+    "data": {
+      "char": "林",
+      "radicals": [
+        "木",
+        "木"
+      ],
+      "distractors": [
+        "同",
+        "方"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "8bdccdc7-2bb5-41fd-8d70-c024ceff58e2",
+    "type": "compose",
+    "difficulty": 2,
+    "title": "字根拼拼乐",
+    "data": {
+      "parts": [
+        "鸟",
+        "口"
+      ],
+      "answer": "鸣",
+      "hint": "读音：míng"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "f5b6595f-9eef-4e09-a82a-3a5adcdd4b49",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "一字之差",
+    "data": {
+      "text": "他一如继往地坚持晨跑锻炼身体。",
+      "typos": [
+        {
+          "pos": 3,
+          "wrong": "继",
+          "correct": "既"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "dc9521b1-c9e2-438d-a6a6-67d113c02e35",
+    "type": "riddle",
+    "difficulty": 3,
+    "title": "国粹知识局",
+    "data": {
+      "question": "下列哪个成语的意思是\"比喻见识狭窄的人\"？",
+      "options": [
+        "博古通今",
+        "一箭双雕",
+        "井底之蛙",
+        "咫尺天涯"
+      ],
+      "answer": "C",
+      "explanation": "井底之蛙（jǐng dǐ zhī wā）：比喻见识狭窄的人例：多出去见见世面，别做井底之蛙。"
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "a3f47a94-3a57-4e44-aa35-fe51c4af36e6",
+    "type": "disassemble",
+    "difficulty": 1,
+    "title": "庖丁解字",
+    "data": {
+      "char": "庆",
+      "radicals": [
+        "广",
+        "大"
+      ],
+      "distractors": [
+        "务",
+        "干"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "760bf203-c981-4a6b-a457-be22dc53dbc0",
+    "type": "compose",
+    "difficulty": 3,
+    "title": "把字拼回来",
+    "data": {
+      "parts": [
+        "扌",
+        "苗"
+      ],
+      "answer": "描",
+      "hint": "读音：miáo"
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "e6206fed-ab22-41cf-a81c-f5c0a22fa221",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "一字之差",
+    "data": {
+      "text": "他从小骄生惯养，吃不了苦。",
+      "typos": [
+        {
+          "pos": 3,
+          "wrong": "骄",
+          "correct": "娇"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "9a34d36e-c7e5-4abe-aa4f-506c94ccd8d8",
+    "type": "riddle",
+    "difficulty": 3,
+    "title": "成语猜猜猜",
+    "data": {
+      "question": "下列哪个成语的意思是\"形容对人的生活十分关切\"？",
+      "options": [
+        "直截了当",
+        "东施效颦",
+        "患难与共",
+        "嘘寒问暖"
+      ],
+      "answer": "D",
+      "explanation": "嘘寒问暖（xū hán wèn nuǎn）：形容对人的生活十分关切例：志愿者常来敬老院嘘寒问暖。"
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "7c13a2ad-3600-4eea-80c8-3b6f8f39a7d9",
+    "type": "disassemble",
+    "difficulty": 4,
+    "title": "庖丁解字",
+    "data": {
+      "char": "握",
+      "radicals": [
+        "扌",
+        "屋"
+      ],
+      "distractors": [
+        "台",
+        "必",
+        "莫",
+        "毛"
+      ]
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "c64a4e2d-dd7e-4d25-8857-d2d9251ce5e3",
+    "type": "compose",
+    "difficulty": 3,
+    "title": "把字拼回来",
+    "data": {
+      "parts": [
+        "亭",
+        "亻"
+      ],
+      "answer": "停",
+      "hint": "读音：tíng"
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "94c82430-55cf-45f1-87e9-38c6d0eb24b3",
+    "type": "typoFind",
+    "difficulty": 5,
+    "title": "一字之差",
+    "data": {
+      "text": "这个小山村宛如世外桃园，宁静美好。敌人被逼得走头无路，只好投降。",
+      "typos": [
+        {
+          "pos": 10,
+          "wrong": "园",
+          "correct": "源"
+        },
+        {
+          "pos": 23,
+          "wrong": "头",
+          "correct": "投"
+        }
+      ]
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "80e9a2a4-3d02-414c-b293-6d2a7884081a",
+    "type": "riddle",
+    "difficulty": 3,
+    "title": "国粹知识局",
+    "data": {
+      "question": "\"老师对全班学生____。\" 横线处应填哪个成语？",
+      "options": [
+        "水到渠成",
+        "花言巧语",
+        "瞠目结舌",
+        "一视同仁"
+      ],
+      "answer": "D",
+      "explanation": "一视同仁（yī shì tóng rén）：表示对人同样看待，不分厚薄例：老师对全班学生一视同仁。"
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "6ced1786-a614-4f25-b7b6-99cf31ed7d96",
+    "type": "disassemble",
+    "difficulty": 1,
+    "title": "这个字由什么组成？",
+    "data": {
+      "char": "刚",
+      "radicals": [
+        "冈",
+        "刂"
+      ],
+      "distractors": [
+        "巷",
+        "才"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "d865c20f-a44f-4243-94cc-2d7c820b2c1c",
+    "type": "compose",
+    "difficulty": 1,
+    "title": "字根拼拼乐",
+    "data": {
+      "parts": [
+        "讠",
+        "上"
+      ],
+      "answer": "让",
+      "hint": "读音：ràng"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "a98f0d70-9b9b-405a-ba33-9d70bee19f44",
+    "type": "typoFind",
+    "difficulty": 5,
+    "title": "火眼金睛找错字",
+    "data": {
+      "text": "教室粉刷后换然一新。宫殿装饰得金壁辉煌，气势恢宏。",
+      "typos": [
+        {
+          "pos": 5,
+          "wrong": "换",
+          "correct": "焕"
+        },
+        {
+          "pos": 16,
+          "wrong": "壁",
+          "correct": "碧"
+        }
+      ]
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "4a5c52b8-829b-47de-a922-ac775d7947d6",
+    "type": "riddle",
+    "difficulty": 3,
+    "title": "这题有点儿冷",
+    "data": {
+      "question": "\"新包装为畅销产品____。\" 横线处应填哪个成语？",
+      "options": [
+        "亲密无间",
+        "巧舌如簧",
+        "锦上添花",
+        "山清水秀"
+      ],
+      "answer": "C",
+      "explanation": "锦上添花（jǐn shàng tiān huā）：比喻好上加好，美上添美例：新包装为畅销产品锦上添花。"
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "9867f19d-426a-4336-8828-3aa9837f1d3c",
+    "type": "disassemble",
+    "difficulty": 1,
+    "title": "庖丁解字",
+    "data": {
+      "char": "红",
+      "radicals": [
+        "纟",
+        "工"
+      ],
+      "distractors": [
+        "令",
+        "匀",
+        "何"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "782c186e-dd64-499d-8dc0-75cbce6c9290",
+    "type": "compose",
+    "difficulty": 1,
+    "title": "合体！汉字",
+    "data": {
+      "parts": [
+        "女",
+        "马"
+      ],
+      "answer": "妈",
+      "hint": "读音：mā"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "1abc9676-67b9-46cd-96d7-43164abcc73d",
+    "type": "typoFind",
+    "difficulty": 5,
+    "title": "火眼金睛找错字",
+    "data": {
+      "text": "理论与实践相辅相承，缺一不可。两国的贸易额与日剧增。",
+      "typos": [
+        {
+          "pos": 8,
+          "wrong": "承",
+          "correct": "成"
+        },
+        {
+          "pos": 23,
+          "wrong": "剧",
+          "correct": "俱"
+        }
+      ]
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "19f3848d-1a31-4b4f-806c-53f215904bdc",
+    "type": "riddle",
+    "difficulty": 4,
+    "title": "国粹知识局",
+    "data": {
+      "question": "\"落后两球的主队决定____。\" 横线处应填哪个成语？",
+      "options": [
+        "背水一战",
+        "不寒而栗",
+        "居安思危",
+        "完璧归赵"
+      ],
+      "answer": "A",
+      "explanation": "背水一战（bèi shuǐ yī zhàn）：比喻在艰难情况下跟敌人决一死战例：落后两球的主队决定背水一战。"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "ede7f359-4094-4507-a4f9-4962b94336c9",
+    "type": "disassemble",
+    "difficulty": 5,
+    "title": "庖丁解字",
+    "data": {
+      "char": "滴",
+      "radicals": [
+        "氵",
+        "啇"
+      ],
+      "distractors": [
+        "风",
+        "夭",
+        "害",
+        "走"
+      ]
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "9d2a1ea1-3ddc-4dcf-a94d-ad50038c86f1",
+    "type": "compose",
+    "difficulty": 3,
+    "title": "把字拼回来",
+    "data": {
+      "parts": [
+        "忄",
+        "青"
+      ],
+      "answer": "情",
+      "hint": "读音：qíng"
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "b8f00cee-1cc1-4054-afd2-cfa83c4a38d8",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "火眼金睛找错字",
+    "data": {
+      "text": "大街上车辆穿流不息，热闹非凡。",
+      "typos": [
+        {
+          "pos": 5,
+          "wrong": "穿",
+          "correct": "川"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "babdb536-b5dc-46f2-921d-2849daf7bdfd",
+    "type": "riddle",
+    "difficulty": 4,
+    "title": "成语猜猜猜",
+    "data": {
+      "question": "下列哪个成语的意思是\"集中群众的智慧，广泛吸收有益的意见\"？",
+      "options": [
+        "一诺千金",
+        "肝胆相照",
+        "集思广益",
+        "心花怒放"
+      ],
+      "answer": "C",
+      "explanation": "集思广益（jí sī guǎng yì）：集中群众的智慧，广泛吸收有益的意见例：方案定稿前先开会集思广益。"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "136543fa-329b-4214-aa81-11fe0af28363",
+    "type": "disassemble",
+    "difficulty": 2,
+    "title": "把字拆开来",
+    "data": {
+      "char": "波",
+      "radicals": [
+        "氵",
+        "皮"
+      ],
+      "distractors": [
+        "因",
+        "今"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "807d9977-1b59-45b2-81a4-83c11a994b8a",
+    "type": "compose",
+    "difficulty": 3,
+    "title": "字根拼拼乐",
+    "data": {
+      "parts": [
+        "钅",
+        "同"
+      ],
+      "answer": "铜",
+      "hint": "读音：tóng"
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "570ed735-0d24-447b-ab11-d7bab1e0668e",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "错别字在哪里？",
+    "data": {
+      "text": "指挥中心重新布署了防汛工作。",
+      "typos": [
+        {
+          "pos": 6,
+          "wrong": "布",
+          "correct": "部"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "72f3d80a-9940-422e-ba8a-e4219ad6b2f9",
+    "type": "riddle",
+    "difficulty": 4,
+    "title": "成语猜猜猜",
+    "data": {
+      "question": "下列哪个成语的意思是\"比喻说话或写文章直截了当谈本题，不拐弯抹角\"？",
+      "options": [
+        "直言不讳",
+        "背水一战",
+        "开门见山",
+        "见多识广"
+      ],
+      "answer": "C",
+      "explanation": "开门见山（kāi mén jiàn shān）：比喻说话或写文章直截了当谈本题，不拐弯抹角例：报告开门见山，直奔主题。"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "71ce0bb8-34a7-40ae-b280-7433f15e946a",
+    "type": "disassemble",
+    "difficulty": 1,
+    "title": "庖丁解字",
+    "data": {
+      "char": "吃",
+      "radicals": [
+        "口",
+        "乞"
+      ],
+      "distractors": [
+        "戈",
+        "丁"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "1c23aa17-847f-41dd-a039-afeef3e5485b",
+    "type": "compose",
+    "difficulty": 1,
+    "title": "把字拼回来",
+    "data": {
+      "parts": [
+        "人",
+        "讠"
+      ],
+      "answer": "认",
+      "hint": "读音：rèn"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "93da171c-8162-4c7c-83c7-4bf1cedf2fe9",
+    "type": "typoFind",
+    "difficulty": 3,
+    "title": "火眼金睛找错字",
+    "data": {
+      "text": "听到开饭，弟弟迫不急待地冲向餐桌。",
+      "typos": [
+        {
+          "pos": 9,
+          "wrong": "急",
+          "correct": "及"
+        }
+      ]
+    },
+    "meta": {
+      "category": "intermediate",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "3eebfed9-616a-48a7-9b9e-474fc71703fd",
+    "type": "riddle",
+    "difficulty": 4,
+    "title": "国粹知识局",
+    "data": {
+      "question": "下列哪个成语的意思是\"辛苦一次，把事情办好，以后就可以不再费力了\"？",
+      "options": [
+        "目瞪口呆",
+        "蒸蒸日上",
+        "有备无患",
+        "一劳永逸"
+      ],
+      "answer": "D",
+      "explanation": "一劳永逸（yī láo yǒng yì）：辛苦一次，把事情办好，以后就可以不再费力了例：重构这套系统虽然费时，却能一劳永逸。"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  },
+  {
+    "id": "fcf9497d-3ab9-4538-ad7b-f0beb6492080",
+    "type": "disassemble",
+    "difficulty": 1,
+    "title": "把字拆开来",
+    "data": {
+      "char": "安",
+      "radicals": [
+        "宀",
+        "女"
+      ],
+      "distractors": [
+        "丩",
+        "曼",
+        "皮"
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "拆字"
+      ]
+    }
+  },
+  {
+    "id": "97c32937-0c37-44e6-8371-b1190b9695ee",
+    "type": "compose",
+    "difficulty": 1,
+    "title": "合体！汉字",
+    "data": {
+      "parts": [
+        "干",
+        "木"
+      ],
+      "answer": "杆",
+      "hint": "读音：gān"
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "合字"
+      ]
+    }
+  },
+  {
+    "id": "10be3872-6166-469d-9252-43e298361727",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "错别字在哪里？",
+    "data": {
+      "text": "学习要脚踏实地，不能好高鹜远。",
+      "typos": [
+        {
+          "pos": 12,
+          "wrong": "鹜",
+          "correct": "骛"
+        }
+      ]
+    },
+    "meta": {
+      "category": "basic",
+      "tags": [
+        "汉字",
+        "错别字"
+      ]
+    }
+  },
+  {
+    "id": "b13a6a69-bc9c-42c8-8fc5-cd201030640f",
+    "type": "riddle",
+    "difficulty": 4,
+    "title": "成语猜猜猜",
+    "data": {
+      "question": "\"学外语最忌____。\" 横线处应填哪个成语？",
+      "options": [
+        "一箭双雕",
+        "风雨同舟",
+        "半途而废",
+        "硕果累累"
+      ],
+      "answer": "C",
+      "explanation": "半途而废（bàn tú ér fèi）：指做事不能坚持到底，中途停顿，有始无终例：学外语最忌半途而废。"
+    },
+    "meta": {
+      "category": "meme",
+      "tags": [
+        "成语",
+        "解谜"
+      ]
+    }
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "name": "ziqu-level-generator",
+  "version": "1.0.0",
+  "description": "字趣小游戏 - 题库与关卡批量生成引擎",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "generate": "node src/index.js --count 100 --output ../../client/assets/levels/",
+    "test": "node test/generator.test.js"
+  }
+}

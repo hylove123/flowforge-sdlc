@@ -1,0 +1,9 @@
+{
+  "name": "acceptChallenge",
+  "version": "1.0.0",
+  "description": "字趣消消乐：应战好友挑战（比分判定与状态流转）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "submitScore",
+  "version": "1.0.0",
+  "description": "字趣消消乐：提交成绩（含防作弊校验）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}

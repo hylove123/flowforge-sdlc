@@ -1,0 +1,94 @@
+# FlowForge desktop CI — cross-platform build & test (macOS + Windows)
+#
+# Pipeline per OS:
+#   deps (root + sidecar) → build sidecar → frontend unit tests (vitest)
+#   → sidecar tests → rust toolchain → cargo check → tauri build
+#   → upload installers (dmg / msi / nsis)
+#
+# Windows notes: the Tauri CLI downloads NSIS/WiX automatically during
+# `tauri build`; WebView2 is preinstalled on windows-latest runners.
+name: Desktop CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            sidecar/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install sidecar dependencies
+        run: npm ci --prefix sidecar
+
+      - name: Build sidecar
+        run: npm run build:sidecar
+
+      - name: Frontend unit tests (vitest)
+        run: npm test
+
+      - name: Sidecar tests
+        run: npm test --prefix sidecar
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Tauri build
+        run: npm run tauri:build
+        env:
+          # keep CI deterministic: never inherit runner-local sidecar overrides
+          FLOWFORGE_SIDECAR_CMD: ""
+
+      - name: Upload bundles (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: flowforge-macos
+          if-no-files-found: error
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/*.app/**
+
+      - name: Upload bundles (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: flowforge-windows
+          if-no-files-found: error
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe

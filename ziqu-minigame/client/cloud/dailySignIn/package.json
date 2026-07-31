@@ -1,0 +1,9 @@
+{
+  "name": "dailySignIn",
+  "version": "1.0.0",
+  "description": "字趣消消乐：每日签到（连续签到统计）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "createChallenge",
+  "version": "1.0.0",
+  "description": "字趣消消乐：发起好友挑战",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}

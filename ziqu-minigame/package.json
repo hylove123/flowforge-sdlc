@@ -1,0 +1,12 @@
+{
+  "name": "ziqu-minigame",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "sync-cloud": "node scripts/sync-cloud.mjs",
+    "validate-levels": "node scripts/validate-levels.mjs"
+  }
+}

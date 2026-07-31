@@ -1,0 +1,9 @@
+{
+  "name": "aggregateLeaderboard",
+  "version": "1.0.0",
+  "description": "字趣消消乐：定时聚合 Top100 排行榜（每 10 分钟）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}

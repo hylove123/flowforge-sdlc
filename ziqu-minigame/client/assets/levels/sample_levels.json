@@ -1,0 +1,245 @@
+[
+  {
+    "id": "1f3a9c2e-8b41-4d6a-9c3e-0a1b2c3d4e01",
+    "type": "disassemble",
+    "difficulty": 1,
+    "title": "人靠木边歇一歇",
+    "data": {
+      "char": "休",
+      "radicals": ["亻", "木"],
+      "distractors": ["大", "口"]
+    },
+    "meta": { "category": "basic", "tags": ["会意字", "入门"] }
+  },
+  {
+    "id": "2b4c8d1f-7a52-4e3b-8d4f-0a1b2c3d4e02",
+    "type": "compose",
+    "difficulty": 1,
+    "title": "日月同辉",
+    "data": {
+      "parts": ["日", "月"],
+      "answer": "明",
+      "hint": "光亮、清楚的意思"
+    },
+    "meta": { "category": "basic", "tags": ["会意字", "入门"] }
+  },
+  {
+    "id": "3c5d9e2a-6b63-4f4c-9e5a-0a1b2c3d4e03",
+    "type": "typoFind",
+    "difficulty": 1,
+    "title": "的地得辨析",
+    "data": {
+      "text": "他每天都很努力的工作",
+      "typos": [{ "pos": 7, "wrong": "的", "correct": "地" }]
+    },
+    "meta": { "category": "basic", "tags": ["的地得", "语法"] }
+  },
+  {
+    "id": "4d6e0f3b-5c74-4a5d-8f6b-0a1b2c3d4e04",
+    "type": "riddle",
+    "difficulty": 1,
+    "title": "网络热词考",
+    "data": {
+      "question": "「YYDS」最初表达的意思是？",
+      "options": ["永远单身", "永远的神", "一衣带水", "有一点帅"],
+      "answer": "B",
+      "explanation": "YYDS 是「永远的神」的拼音缩写，用来表达极高的赞美。"
+    },
+    "meta": { "category": "meme", "tags": ["缩写梗", "热词"] }
+  },
+  {
+    "id": "5e7f1a4c-4d85-4b6e-9a7c-0a1b2c3d4e05",
+    "type": "disassemble",
+    "difficulty": 1,
+    "title": "上小下大",
+    "data": {
+      "char": "尖",
+      "radicals": ["小", "大"],
+      "distractors": ["土", "日"]
+    },
+    "meta": { "category": "basic", "tags": ["会意字", "入门"] }
+  },
+  {
+    "id": "6f8a2b5d-3e96-4c7f-8b8d-0a1b2c3d4e06",
+    "type": "compose",
+    "difficulty": 1,
+    "title": "女子为好",
+    "data": {
+      "parts": ["女", "子"],
+      "answer": "好",
+      "hint": "美好、喜欢的意思"
+    },
+    "meta": { "category": "basic", "tags": ["会意字", "入门"] }
+  },
+  {
+    "id": "7a9b3c6e-2fa7-4d8a-9c9e-0a1b2c3d4e07",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "错字捉虫",
+    "data": {
+      "text": "我在图书馆看了一夲书",
+      "typos": [{ "pos": 8, "wrong": "夲", "correct": "本" }]
+    },
+    "meta": { "category": "basic", "tags": ["形近字"] }
+  },
+  {
+    "id": "8b0c4d7f-1ab8-4e9b-8dae-0a1b2c3d4e08",
+    "type": "riddle",
+    "difficulty": 2,
+    "title": "成语典故",
+    "data": {
+      "question": "成语「破釜沉舟」的主人公是谁？",
+      "options": ["刘邦", "项羽", "韩信", "曹操"],
+      "answer": "B",
+      "explanation": "巨鹿之战中项羽下令砸锅沉船，以示决一死战。"
+    },
+    "meta": { "category": "intermediate", "tags": ["成语", "历史"] }
+  },
+  {
+    "id": "9c1d5e8a-0bc9-4fac-9ebf-0a1b2c3d4e09",
+    "type": "disassemble",
+    "difficulty": 2,
+    "title": "小土飞扬",
+    "data": {
+      "char": "尘",
+      "radicals": ["小", "土"],
+      "distractors": ["大", "木"]
+    },
+    "meta": { "category": "basic", "tags": ["会意字"] }
+  },
+  {
+    "id": "0d2e6f9b-9cda-4abd-8fca-0a1b2c3d4e10",
+    "type": "compose",
+    "difficulty": 2,
+    "title": "双木成林",
+    "data": {
+      "parts": ["木", "木"],
+      "answer": "林",
+      "hint": "成片的树木"
+    },
+    "meta": { "category": "basic", "tags": ["会意字"] }
+  },
+  {
+    "id": "1e3f7a0c-8deb-4bce-9adb-0a1b2c3d4e11",
+    "type": "typoFind",
+    "difficulty": 2,
+    "title": "同音易混",
+    "data": {
+      "text": "考试之前要做好充份的准备",
+      "typos": [{ "pos": 8, "wrong": "份", "correct": "分" }]
+    },
+    "meta": { "category": "intermediate", "tags": ["同音字"] }
+  },
+  {
+    "id": "2f4a8b1d-7efc-4cdf-8bec-0a1b2c3d4e12",
+    "type": "riddle",
+    "difficulty": 2,
+    "title": "谐音梗溯源",
+    "data": {
+      "question": "「栓Q」谐音自哪个英文短语？",
+      "options": ["Thank you", "Sorry", "Excuse me", "See you"],
+      "answer": "A",
+      "explanation": "「栓Q」是 Thank you 的空耳谐音，常用于表达无语或调侃式感谢。"
+    },
+    "meta": { "category": "meme", "tags": ["谐音梗", "热词"] }
+  },
+  {
+    "id": "3a5b9c2e-6fad-4dea-9cfd-0a1b2c3d4e13",
+    "type": "disassemble",
+    "difficulty": 3,
+    "title": "手搭目上望远方",
+    "data": {
+      "char": "看",
+      "radicals": ["手", "目"],
+      "distractors": ["日", "口"]
+    },
+    "meta": { "category": "intermediate", "tags": ["会意字"] }
+  },
+  {
+    "id": "4b6c0d3f-5abe-4efb-8dae-0a1b2c3d4e14",
+    "type": "compose",
+    "difficulty": 2,
+    "title": "田间出力",
+    "data": {
+      "parts": ["田", "力"],
+      "answer": "男",
+      "hint": "在田里出力劳作的人"
+    },
+    "meta": { "category": "basic", "tags": ["会意字"] }
+  },
+  {
+    "id": "5c7d1e4a-4bcf-4fac-9ebf-0a1b2c3d4e15",
+    "type": "typoFind",
+    "difficulty": 3,
+    "title": "形声易错",
+    "data": {
+      "text": "春天到了，公园里百花胜开",
+      "typos": [{ "pos": 10, "wrong": "胜", "correct": "盛" }]
+    },
+    "meta": { "category": "intermediate", "tags": ["形近字", "季节"] }
+  },
+  {
+    "id": "6d8e2f5b-3cda-4abd-8fca-0a1b2c3d4e16",
+    "type": "riddle",
+    "difficulty": 3,
+    "title": "成语寓意",
+    "data": {
+      "question": "成语「画蛇添足」告诉我们什么道理？",
+      "options": ["做事要锦上添花", "多此一举反而坏事", "画画要仔细观察", "蛇本来是有脚的"],
+      "answer": "B",
+      "explanation": "楚人赛画蛇，先成者给蛇添足反而输掉，比喻做多余的事反受其害。"
+    },
+    "meta": { "category": "intermediate", "tags": ["成语", "寓言"] }
+  },
+  {
+    "id": "7e9f3a6c-2deb-4bce-9adb-0a1b2c3d4e17",
+    "type": "disassemble",
+    "difficulty": 3,
+    "title": "三木成森",
+    "data": {
+      "char": "森",
+      "radicals": ["木", "木", "木"],
+      "distractors": ["火", "口"]
+    },
+    "meta": { "category": "intermediate", "tags": ["叠字", "会意字"] }
+  },
+  {
+    "id": "8f0a4b7d-1efc-4cdf-8bec-0a1b2c3d4e18",
+    "type": "compose",
+    "difficulty": 3,
+    "title": "山中之石",
+    "data": {
+      "parts": ["山", "石"],
+      "answer": "岩",
+      "hint": "山上的大石头"
+    },
+    "meta": { "category": "intermediate", "tags": ["会意字"] }
+  },
+  {
+    "id": "9a1b5c8e-0fad-4dea-9cfd-0a1b2c3d4e19",
+    "type": "typoFind",
+    "difficulty": 4,
+    "title": "双重陷阱",
+    "data": {
+      "text": "他既然忘记了带作业，老师严历地批评了他",
+      "typos": [
+        { "pos": 1, "wrong": "既", "correct": "竟" },
+        { "pos": 13, "wrong": "历", "correct": "厉" }
+      ]
+    },
+    "meta": { "category": "weekly", "tags": ["多错字", "进阶"] }
+  },
+  {
+    "id": "0b2c6d9f-9abe-4efb-8dae-0a1b2c3d4e20",
+    "type": "riddle",
+    "difficulty": 3,
+    "title": "热词语义",
+    "data": {
+      "question": "「绝绝子」通常用来表达什么情绪？",
+      "options": ["非常绝望", "极度赞叹", "宣布绝交", "断然拒绝"],
+      "answer": "B",
+      "explanation": "「绝绝子」多用于夸赞事物好到极点，也偶用于反讽。"
+    },
+    "meta": { "category": "meme", "tags": ["热词", "语义"] }
+  }
+]

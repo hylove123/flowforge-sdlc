@@ -1,0 +1,10 @@
+{
+  "name": "ziqu-cloud",
+  "version": "1.0.0",
+  "private": true,
+  "description": "字趣消消乐 微信云开发后端（云函数 + 集合设计）",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node test/cloud.test.js"
+  }
+}

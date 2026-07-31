@@ -1,0 +1,29 @@
+{
+  "name": "flowforge-sidecar",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "FlowForge local sidecar — stdin/stdout JSON-RPC 2.0 server hosting domain logic",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "npm run typecheck && node scripts/build.mjs",
+    "test": "node --import tsx --test \"test/*.check.js\" \"test/*.check.ts\""
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.28.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.2.3",
+    "@langchain/langgraph": "^1.4.8",
+    "@langchain/langgraph-checkpoint-sqlite": "^1.0.3",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^13.0.1",
+    "sqlite-vec": "^0.1.9"
+  }
+}

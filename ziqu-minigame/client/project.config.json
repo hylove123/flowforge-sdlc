@@ -1,0 +1,23 @@
+{
+  "appid": "wx7516a6e8ca71898f",
+  "compileType": "game",
+  "projectname": "ziqu-minigame",
+  "description": "字趣 —— 汉字拆解/合成/找茬/解谜 微信小游戏",
+  "miniprogramRoot": "",
+  "cloudfunctionRoot": "cloud/",
+  "libVersion": "latest",
+  "setting": {
+    "es6": true,
+    "enhance": true,
+    "postcss": false,
+    "minified": true,
+    "urlCheck": false,
+    "uglifyFileName": false,
+    "ignoreUploadUnusedFiles": true
+  },
+  "editorSetting": {
+    "tabIndent": "insertSpaces",
+    "tabSize": 2
+  },
+  "condition": {}
+}

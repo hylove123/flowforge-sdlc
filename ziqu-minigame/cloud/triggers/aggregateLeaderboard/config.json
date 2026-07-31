@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "openapi": [],
+    "database": {
+      "read": ["players", "leaderboard_cache"],
+      "write": ["leaderboard_cache"]
+    }
+  },
+  "triggers": [
+    {
+      "name": "timer",
+      "type": "timer",
+      "config": "0 */10 * * * * *"
+    }
+  ]
+}

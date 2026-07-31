@@ -1,0 +1,30 @@
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+src-tauri/target/
+*.dmg
+*.msi
+*.app
+
+# IDE / tool state
+.iga/
+.qoder/
+.edgeone/
+.ai-code-stats/
+.DS_Store
+{{HOMEBREW_PREFIX}}/
+
+# Playwright / e2e artifacts
+test-results/
+playwright-report/
+.playwright/
+e2e-artifacts/
