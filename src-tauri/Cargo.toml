@@ -33,6 +33,8 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-opener = "2"
 # 自动更新：签名校验 + 下载 + 安装重启（tauri build 时由 TAURI_SIGNING_PRIVATE_KEY 签名产物）
 tauri-plugin-updater = "2"
+# 更新安装后 relaunch 重启应用（process:allow-restart）
+tauri-plugin-process = "2"
 # Phase 5 code intelligence: tree-sitter parsing + SQLite FTS5 BM25 index + git incremental.
 # rusqlite is pinned to 0.32 so its libsqlite3-sys (0.30.x) unifies with the one
 # already in the graph via tauri-plugin-sql/sqlx (libsqlite3-sys has links="sqlite3").
