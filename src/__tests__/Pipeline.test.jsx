@@ -1,8 +1,10 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import React from 'react'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { AppProvider } from '@/context/AppContext'
+import { AppProvider, PROJECTS_KEY, DELIVERIES_KEY, STAGE_DELIVERABLES_KEY } from '@/context/AppContext'
+import { storage } from '@/adapters/StorageService'
+import { SEED_PROJECTS, SEED_DELIVERIES } from './fixtures/seedData'
 import Pipeline from '@/pages/Pipeline'
 
 vi.mock('react-router-dom', () => ({
@@ -15,6 +17,13 @@ function renderPipeline() {
 }
 
 describe('Pipeline page (delivery workspace)', () => {
+  beforeEach(() => {
+    // Pure client boots from local storage — seed the demo-era workspace
+    storage.setJSON(PROJECTS_KEY, SEED_PROJECTS)
+    storage.setJSON(DELIVERIES_KEY, SEED_DELIVERIES)
+    storage.remove(STAGE_DELIVERABLES_KEY)
+  })
+
   it('renders compact header with project name and 新建需求 action', () => {
     renderPipeline()
     // Header shows the current project name and delivery/stage counts

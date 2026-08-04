@@ -4,8 +4,8 @@
  * Integrated with Ontology Knowledge Graph for context injection
  */
 
-import { getAIContext, getKnowledgeGraph } from '@/services/graph'
 import { storage } from '@/adapters/StorageService'
+import { sidecar } from '@/adapters/SidecarBridge'
 
 const CUSTOM_MODELS_KEY = 'flowforge_custom_models'
 const ACTIVE_MODEL_KEY = 'flowforge_active_model'
@@ -27,6 +27,7 @@ export function addCustomModel(model) {
     id: `model_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     enabled: true,
     ...model,
+    endpoint: normalizeEndpoint(model.endpoint),
     createdAt: new Date().toISOString(),
   }
   models.push(newModel)
@@ -38,7 +39,10 @@ export function updateCustomModel(id, updates) {
   const models = getCustomModels()
   const idx = models.findIndex(m => m.id === id)
   if (idx >= 0) {
-    models[idx] = { ...models[idx], ...updates }
+    const normalized = updates.endpoint !== undefined
+      ? { ...updates, endpoint: normalizeEndpoint(updates.endpoint) }
+      : updates
+    models[idx] = { ...models[idx], ...normalized }
     saveCustomModels(models)
     return models[idx]
   }
@@ -98,8 +102,27 @@ export function resolveModelConfig(modelNameOrId) {
   return null
 }
 
+// ─── Model options for dropdowns ───────────────────────
+
+/** 返回所有已启用的自定义模型选项（供下拉列表使用） */
+export function getModelOptions() {
+  return getCustomModels()
+    .filter(m => m.enabled)
+    .map(m => ({ value: m.name, label: m.name }))
+}
+
 // ─── Test Model Connection ──────────────────────────────────────
 
+/** 去除 endpoint 尾部斜杠，避免拼接出双斜杠 URL */
+export function normalizeEndpoint(endpoint) {
+  return (endpoint || '').trim().replace(/\/+$/, '')
+}
+
+/**
+ * 连接测试改走 sidecar（Node 环境无 CORS 预检问题）。
+ * 渲染进程直连 fetch 会因 Authorization + JSON 触发预检，
+ * 而多数 LLM 端点（如阿里百炼）不返回 CORS 头，导致误报"网络错误"。
+ */
 export async function testModelConnection(config) {
   const { endpoint, apiKey, modelId } = config
   if (!apiKey) return { success: false, message: '未配置 Token' }
@@ -107,30 +130,18 @@ export async function testModelConnection(config) {
   if (!modelId) return { success: false, message: '未配置模型名称' }
 
   try {
-    const response = await fetch(`${endpoint}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: modelId,
-        messages: [{ role: 'user', content: 'Hi' }],
-        max_tokens: 5,
-      }),
+    const result = await sidecar.invoke('llm.connect_test', {
+      endpoint: normalizeEndpoint(endpoint),
+      apiKey,
+      modelId,
     })
-
-    if (response.ok) return { success: true, message: '连接成功，模型可用' }
-
-    const errText = await response.text()
-    let errMsg = `HTTP ${response.status}`
-    try {
-      const errJson = JSON.parse(errText)
-      errMsg = errJson.error?.message || errMsg
-    } catch (e) { /* use default */ }
-    return { success: false, message: errMsg }
+    if (result && typeof result.success === 'boolean') {
+      return result
+    }
+    return { success: false, message: 'sidecar 返回结果异常' }
   } catch (err) {
-    return { success: false, message: `网络错误: ${err.message}` }
+    const detail = err?.message || String(err)
+    return { success: false, message: `sidecar 服务不可用：${detail}` }
   }
 }
 
@@ -422,6 +433,7 @@ const GENERATION_PROMPTS = {
   'prd': '请为以下项目生成PRD(产品需求文档)，包含：功能详细描述、用户故事、交互流程、验收标准、非功能性需求。\n\n项目：{project}\n需求：{requirement}\n前置内容(BRD)：{previousContent}',
   'test': '请根据以下PRD内容生成测试用例，包含：功能测试、边界测试、异常测试。每个用例使用Given-When-Then格式，标注优先级(P0/P1/P2)。\n\n项目：{project}\n需求：{requirement}\nPRD内容：{previousContent}',
   'dev-plan': '请根据以下PRD内容生成技术方案文档(TS)，包含：架构设计、技术选型、数据库设计、API接口定义、技术风险评估。\n\n项目：{project}\n需求：{requirement}\nPRD内容：{previousContent}',
+  'prototype': '请根据以下PRD内容生成一个单文件 HTML 交互原型（线框图风格）。要求：\n1. 输出完整的单个 HTML 文件，所有 CSS 内联在 <style> 中，不依赖任何外部资源；\n2. 线框风格：灰白色调、简洁边框、清晰的信息层级，顶部标注原型标题；\n3. 按 PRD 描述的页面结构组织多个页面，用顶部 tab 切换（纯内联 JS 实现）；\n4. 覆盖 PRD 中的核心页面与关键交互流程，交互控件用占位元素表达；\n5. 只输出 HTML 代码本身，不要任何解释文字。\n\n项目：{project}\n需求：{requirement}\nPRD内容：{previousContent}',
 }
 
 export async function generateDeliverable(stageId, projectName, requirement, previousContent = '', modelOverride = null, graphContext = null, userInstructions = null, chatHistory = null) {

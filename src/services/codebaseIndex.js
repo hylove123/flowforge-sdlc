@@ -1,22 +1,27 @@
 /**
- * Codebase Index Service — manages code indexing
- * Builds searchable index of project repositories for knowledge Q&A and delivery flow
+ * Codebase Index Service — manages code indexing (dual-engine, t3)
  *
- * Dual-mode (Phase 5):
- *   - tauri: real tree-sitter index via Rust commands (code_index_full/stats/query)
- *     plus hybrid retrieval through the sidecar `code.search` RPC
- *   - web:   original mock behavior, unchanged
- * The public function signatures stay identical across modes.
+ * 引擎 A：tree-sitter FTS5 BM25 + sqlite-vec 向量（Rust code_index_*）——搜得快
+ * 引擎 B：codebase-memory-mcp 图谱引擎（sidecar graph_engine.*）——看得深
+ *
+ * 统一构建：startIndexing 先建 A，随后后台建 B（不阻塞）；
+ * 统一搜索：searchCodebase 并行两路 + RRF 融合，B 不可用时自动降级仅用 A。
  */
 
-import { storage, detectRuntimeMode } from '@/adapters/StorageService'
+import { storage } from '@/adapters/StorageService'
 import { invoke as tauriInvoke } from '@tauri-apps/api/core'
 import { listen as tauriListen } from '@tauri-apps/api/event'
 import { sidecar } from '@/adapters/SidecarBridge'
 import { getRepositories } from '@/services/repository'
-import { getKnowledgeGraph } from '@/services/graph'
+import { registerCodeModules } from '@/services/knowledge'
+import {
+  graphProjectName, indexRepoGraph, indexCrossRepo, searchGraphCode,
+  traceSymbol, detectGraphChanges, deleteGraphProject,
+} from '@/services/graphEngine'
 
 const INDEX_KEY = 'flowforge_codebase_index'
+// 项目级图谱（引擎 B 跨仓库）状态：{ [projectId]: { crossStatus, crossEdges, crossByType, lastCrossAt } }
+const GRAPH_STATE_KEY = 'flowforge_graph_state'
 
 // Index structure:
 // {
@@ -24,7 +29,10 @@ const INDEX_KEY = 'flowforge_codebase_index'
 //   projectId: string,
 //   repoId: string,
 //   repoName: string,
-//   status: 'none' | 'indexing' | 'ready' | 'error',
+//   status: 'none' | 'indexing' | 'ready' | 'error',   // 引擎 A（FTS/向量）
+//   graphStatus: 'none' | 'indexing' | 'ready' | 'error', // 引擎 B（图谱）
+//   graphError: string | null,
+//   graphIndexedAt: string | null,
 //   fileCount: number,
 //   language: string[],     // detected languages
 //   indexSize: string,      // human-readable
@@ -32,6 +40,20 @@ const INDEX_KEY = 'flowforge_codebase_index'
 //   error: string | null,
 //   chunks: number,         // number of indexed chunks
 // }
+
+// ─── 项目级图谱（跨仓库）状态 ───────────────────────────────
+
+export function getGraphState(projectId) {
+  const all = storage.getJSON(GRAPH_STATE_KEY, {}) || {}
+  return projectId ? (all[projectId] || null) : all
+}
+
+export function saveGraphState(projectId, updates) {
+  const all = storage.getJSON(GRAPH_STATE_KEY, {}) || {}
+  all[projectId] = { ...(all[projectId] || {}), ...updates }
+  storage.setJSON(GRAPH_STATE_KEY, all)
+  return all[projectId]
+}
 
 export function getIndexes(projectId) {
   const all = storage.getJSON(INDEX_KEY, []) || []
@@ -78,31 +100,8 @@ export async function startIndexing(projectId, repoId, repoName, onProgress) {
     saveIndexes(all)
   }
 
-  // tauri mode: hand off to the real tree-sitter index
-  if (detectRuntimeMode() === 'tauri') {
-    return startIndexingTauri(projectId, repoId, onProgress)
-  }
-
-  // Simulate indexing process with progress
-  await new Promise(resolve => setTimeout(resolve, 2000))
-
-  // Simulate completion with mock stats
-  const mockFileCount = Math.floor(Math.random() * 800) + 200
-  const mockChunks = Math.floor(mockFileCount * 1.5)
-  const mockLanguages = ['TypeScript', 'JavaScript', 'JSON', 'CSS']
-  const mockSize = `${(mockChunks * 0.8).toFixed(1)} MB`
-
-  const updated = updateIndex(repoId, {
-    status: 'ready',
-    fileCount: mockFileCount,
-    language: mockLanguages,
-    indexSize: mockSize,
-    lastIndexed: new Date().toISOString(),
-    chunks: mockChunks,
-    error: null,
-  })
-
-  return updated
+  // hand off to the real tree-sitter index
+  return startIndexingTauri(projectId, repoId, onProgress)
 }
 
 /** tauri path of startIndexing: full index + knowledge-graph module hookup */
@@ -128,7 +127,7 @@ async function startIndexingTauri(projectId, repoId, onProgress) {
     try {
       const files = await listIndexedFiles(stats.dbPath)
       const modules = aggregateTopModules(files)
-      const result = registerCodeModuleEntities({
+      const result = await registerCodeModuleEntities({
         projectId, repoId, repoName: repo.name || repoId, modules,
       })
       modulesRegistered = result.registered
@@ -148,11 +147,75 @@ async function startIndexingTauri(projectId, repoId, onProgress) {
       error: null,
     })
     try { onProgress?.({ phase: 'done', repoId, projectId, modulesRegistered }) } catch { /* ignore */ }
+    // ── 统一构建：引擎 A 就绪后，后台启动引擎 B 图谱索引（不阻塞 A 可用） ──
+    // full/moderate 按仓库规模选择（大仓库跳过全量相似度边）
+    const graphMode = (summary.files ?? 0) > 2000 ? 'moderate' : 'full'
+    void startGraphIndexing(projectId, repoId, repoPath, graphMode)
     return updated
   } catch (e) {
     notify('error')
     return updateIndex(repoId, { status: 'error', error: e?.message || String(e) })
   }
+}
+
+// ─── 引擎 B（codebase-memory-mcp 图谱）统一构建 ────────────────
+
+/**
+ * 后台建立单仓库图谱索引（引擎 B）。内部函数：唯一对外入口是
+ * startIndexing（串行 引擎A → 引擎B）。失败只记录 graphStatus。
+ */
+async function startGraphIndexing(projectId, repoId, repoPath, mode) {
+  if (!repoPath) return null
+  updateIndex(repoId, { graphStatus: 'indexing', graphError: null })
+  try {
+    const result = await indexRepoGraph(repoPath, mode)
+    updateIndex(repoId, { graphStatus: 'ready', graphIndexedAt: new Date().toISOString(), graphError: null })
+    return result
+  } catch (e) {
+    updateIndex(repoId, { graphStatus: 'error', graphError: e?.message || String(e) })
+    return null
+  }
+}
+
+/**
+ * 一键建立跨仓库智能：cross-repo-intelligence 模式匹配 Route/Channel，
+ * 生成 CROSS_HTTP_CALLS / CROSS_ASYNC_CALLS / CROSS_CHANNEL 边。
+ * 需要项目内至少一个仓库的引擎 B 索引就绪。
+ */
+export async function buildCrossRepoIntelligence(projectId) {
+  const indexes = getIndexes(projectId).filter(i => i.graphStatus === 'ready' && i.repoPath)
+  if (indexes.length === 0) {
+    throw new Error('请先完成至少一个仓库的图谱索引')
+  }
+  saveGraphState(projectId, { crossStatus: 'indexing' })
+  try {
+    const result = await indexCrossRepo(indexes[0].repoPath, ['*'])
+    saveGraphState(projectId, { crossStatus: 'ready', lastCrossAt: new Date().toISOString() })
+    return result
+  } catch (e) {
+    saveGraphState(projectId, { crossStatus: 'error', crossError: e?.message || String(e) })
+    throw e
+  }
+}
+
+/**
+ * 统一增量：commit watcher 触发引擎 A 重索引后（code_index://updated），
+ * 同步触发引擎 B 的 detect_changes（尽力而为，逐仓库独立失败隔离）。
+ */
+export async function syncGraphChanges(projectId) {
+  const indexes = getIndexes(projectId).filter(i => i.graphStatus === 'ready' && i.repoPath)
+  const results = []
+  for (const idx of indexes) {
+    const repo = getRepositories(projectId).find(r => r.id === idx.repoId)
+    const project = graphProjectName(repo || { path: idx.repoPath, name: idx.repoName })
+    if (!project) continue
+    try {
+      results.push({ project, ok: true, result: await detectGraphChanges(project, undefined, repo?.path || idx.repoPath) })
+    } catch (e) {
+      results.push({ project, ok: false, error: e?.message || String(e) })
+    }
+  }
+  return results
 }
 
 // ─── Knowledge-graph CodeModule rollup (tauri) ─────────────────
@@ -214,60 +277,23 @@ export function aggregateTopModules(files, { limit = 20 } = {}) {
 }
 
 /**
- * Register aggregated modules as CodeModule entities in the knowledge graph.
- * Idempotent: previous code-index entities of the same project+repo are
- * removed first (deleteEntity also drops their edges), then re-registered.
- * Each entity is linked IMPLEMENTS → the latest dev-plan Deliverable when one
- * exists, so the delivery flow's knowledge recall can reference the modules.
- * @returns {{registered: number, edges: number}}
+ * Register aggregated modules as CodeModule entities in the knowledge graph
+ * (sidecar knowledgeService, SQLite WAL). Idempotent: the sidecar upserts by
+ * label (`{repoName}/{moduleName}`) within the project, and links each new
+ * module IMPLEMENTS → the latest Deliverable when one exists.
+ * @returns {Promise<{registered: number, edges: number}>}
  */
-export function registerCodeModuleEntities({ projectId, repoId, repoName, modules }) {
-  const graph = getKnowledgeGraph()
-
-  // idempotency: clear the previous rollup for this project+repo
-  const stale = graph
-    .getEntities({ concept: 'CodeModule', projectId })
-    .filter(e => e.properties?.source === 'code-index' && e.properties?.repoId === repoId)
-  stale.forEach(e => graph.deleteEntity(e.id))
-
-  // IMPLEMENTS target: latest dev-plan Deliverable of the project (if any)
-  const devPlans = graph.getEntities({ concept: 'Deliverable', projectId, stage: 'dev-plan' })
-  const target = devPlans[devPlans.length - 1] || null
-
-  let registered = 0
-  let edges = 0
-  for (const mod of modules || []) {
-    if (!mod?.name) continue
-    const kindLabel = mod.kind === 'package' ? 'Java包' : '目录'
-    const entity = graph.addEntity({
-      concept: 'CodeModule',
-      projectId,
-      label: `${repoName}/${mod.name}`,
-      stage: 'dev',
-      properties: {
-        source: 'code-index',
-        repoId,
-        repoName,
-        moduleName: mod.name,
-        kind: mod.kind,
-        fileCount: mod.fileCount,
-        languages: mod.languages || [],
-        sampleFiles: mod.sampleFiles || [],
-        content: `代码模块 ${mod.name}（${kindLabel}，${mod.fileCount} 个文件，语言：${(mod.languages || []).join('/') || '未知'}）\n示例文件：${(mod.sampleFiles || []).join('、')}`,
-      },
-    })
-    registered += 1
-    if (target) {
-      const edge = graph.addEdge({
-        relation: 'IMPLEMENTS',
-        sourceId: entity.id,
-        targetId: target.id,
-        projectId,
-      })
-      if (edge) edges += 1
-    }
-  }
-  return { registered, edges }
+export async function registerCodeModuleEntities({ projectId, repoName, modules }) {
+  const mapped = (modules || [])
+    .filter(mod => mod?.name)
+    .map(mod => ({
+      file: `${repoName}/${mod.name}`,
+      lang: (mod.languages || [])[0] ?? null,
+      symbolCount: mod.fileCount,
+      topSymbols: mod.sampleFiles || [],
+    }))
+  const result = await registerCodeModules({ projectId, stageId: 'dev', modules: mapped })
+  return { registered: result?.registered ?? 0, edges: result?.edges ?? 0 }
 }
 
 export function updateIndex(repoId, updates) {
@@ -282,7 +308,39 @@ export function updateIndex(repoId, updates) {
 }
 
 export function deleteIndex(repoId) {
+  const target = getIndex(repoId)
   saveIndexes(getIndexes().filter(i => i.repoId !== repoId))
+  // 尽力而为清理引擎 B 侧的图谱项目（以仓库目录名为项目名）
+  if (target?.repoPath) {
+    const project = graphProjectName({ path: target.repoPath, name: target.repoName })
+    if (project) deleteGraphProject(project, target.repoPath).catch(() => {})
+  }
+}
+
+/**
+ * Cascade cleanup: drop every index record of a project
+ * (used when a project is removed from the project center).
+ * @returns {number} number of removed records
+ */
+export function removeIndexesForProject(projectId) {
+  const all = getIndexes()
+  const removedRecords = all.filter(i => i.projectId === projectId)
+  const remaining = all.filter(i => i.projectId !== projectId)
+  const removed = all.length - remaining.length
+  if (removed > 0) saveIndexes(remaining)
+  // 尽力而为：同步清理引擎 B 图谱项目与项目级跨仓库状态
+  for (const rec of removedRecords) {
+    if (rec.repoPath) {
+      const project = graphProjectName({ path: rec.repoPath, name: rec.repoName })
+      if (project) deleteGraphProject(project, rec.repoPath).catch(() => {})
+    }
+  }
+  const states = storage.getJSON(GRAPH_STATE_KEY, {}) || {}
+  if (states[projectId]) {
+    delete states[projectId]
+    storage.setJSON(GRAPH_STATE_KEY, states)
+  }
+  return removed
 }
 
 /**
@@ -309,8 +367,8 @@ export function getProjectIndexStats(projectId) {
 }
 
 /**
- * Search the codebase index.
- * In production, this would call Codebase MCP's search tool.
+ * Search the codebase index — dual-engine fused retrieval (t3).
+ * 引擎 B 未就绪时自动降级仅用引擎 A。
  */
 export async function searchCodebase(projectId, query) {
   const stats = getProjectIndexStats(projectId)
@@ -318,78 +376,140 @@ export async function searchCodebase(projectId, query) {
     return { results: [], message: '项目尚未建立代码索引' }
   }
 
-  // tauri mode: hybrid retrieval (sidecar code.search → BM25 fallback)
-  if (detectRuntimeMode() === 'tauri') {
-    return searchCodebaseTauri(projectId, query, stats)
-  }
-
-  // Simulate search delay
-  await new Promise(resolve => setTimeout(resolve, 500))
-
-  // Return mock results
-  return {
-    results: [
-      {
-        file: 'src/services/userService.ts',
-        line: 42,
-        snippet: `export async function getUserById(id: string): Promise<User> {\n  return await db.user.findUnique({ where: { id } });\n}`,
-        relevance: 0.95,
-        repo: 'main',
-      },
-      {
-        file: 'src/controllers/userController.ts',
-        line: 18,
-        snippet: `router.get('/users/:id', async (req, res) => {\n  const user = await getUserById(req.params.id);\n  res.json(user);\n});`,
-        relevance: 0.82,
-        repo: 'main',
-      },
-    ],
-    message: `在 ${stats.totalFiles} 个文件中找到相关结果`,
-    stats,
-  }
+  // hybrid retrieval (sidecar code.search → BM25 fallback) + graph engine fusion
+  return searchCodebaseTauri(projectId, query, stats)
 }
 
-/** tauri path of searchCodebase: sidecar hybrid search, Rust BM25 as fallback */
+// ─── Dual-engine fusion helpers ─────────────────────────────────
+
+/** Reciprocal Rank Fusion：多路排序列表按 1/(k+rank) 累加融合。 */
+export function reciprocalRankFusion(lists, k = 60) {
+  const acc = new Map()
+  for (const { source, items } of lists) {
+    items.forEach((item, rank) => {
+      const key = [item.repo, item.file, item.name || item.line].join('|')
+      const cur = acc.get(key) || { item, score: 0, sources: [] }
+      cur.score += 1 / (k + rank + 1)
+      if (!cur.sources.includes(source)) cur.sources.push(source)
+      acc.set(key, cur)
+    })
+  }
+  return [...acc.values()].sort((a, b) => b.score - a.score)
+}
+
+/** 引擎 B（search_code compact）命中归一化为统一结构。 */
+function normalizeGraphHits(res, repoName) {
+  const list = Array.isArray(res) ? res : res?.results ?? res?.matches ?? []
+  if (!Array.isArray(list)) return []
+  return list.map(h => ({
+    file: h.file ?? h.path ?? h.filePath ?? '',
+    line: h.line ?? h.start_line ?? h.startLine ?? 1,
+    name: h.name ?? h.symbol ?? h.function ?? '',
+    kind: h.kind ?? h.type ?? 'symbol',
+    signature: h.signature ?? h.declaration ?? '',
+    score: typeof h.score === 'number' ? h.score : 0,
+    repo: repoName,
+  }))
+}
+
+/** Top 命中符号用引擎 B trace_path 增补调用方/被调方上下文（尽力而为，4s 上限）。 */
+async function enrichWithTrace(hits) {
+  const candidates = hits.filter(h => h.sources.includes('graph') && h.name).slice(0, 2)
+  await Promise.all(candidates.map(async (h) => {
+    const project = graphProjectName({ path: '', name: h.repo })
+    if (!project || !h.name) return
+    try {
+      const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('trace timeout')), 4000))
+      const trace = await Promise.race([traceSymbol(project, h.name, { depth: 2 }), timeout])
+      const hops = Array.isArray(trace) ? trace.length : trace?.hops?.length ?? trace?.path?.length ?? 0
+      if (hops > 0) h.trace = `调用链深度 ${hops} 跳（trace_path）`
+    } catch { /* trace 是增补信息，失败静默 */ }
+  }))
+  return hits
+}
+
+/** tauri path of searchCodebase: engine A (hybrid) ∥ engine B (graph) → RRF fusion */
 async function searchCodebaseTauri(projectId, query, stats) {
   const indexes = getIndexes(projectId).filter(i => i.status === 'ready' && i.repoPath)
   if (indexes.length === 0) {
     return { results: [], message: '项目尚未建立代码索引（tauri）', stats }
   }
-  const all = []
+
+  // ── 引擎 A：sidecar code.search（BM25+向量），失败回落 Rust BM25 ──
+  const engineAHits = []
   let backend = 'bm25'
   let durationMs = 0
-  for (const idx of indexes) {
+  const engineATasks = indexes.map(async (idx) => {
     try {
       const res = await sidecar.invoke('code.search', { repoPath: idx.repoPath, query, topK: 5, projectId })
       if (res?.backend === 'hybrid') backend = 'hybrid'
       durationMs += res?.durationMs ?? 0
-      for (const hit of res?.results ?? []) all.push({ ...hit, repo: idx.repoName })
+      for (const hit of res?.results ?? []) engineAHits.push({ ...hit, repo: idx.repoName })
     } catch {
       // sidecar unavailable → query the Rust index directly (pure BM25)
       const hits = await tauriInvoke('code_index_query', { repoPath: idx.repoPath, query, topK: 5 })
-      for (const hit of hits ?? []) all.push({ ...hit, repo: idx.repoName })
+      for (const hit of hits ?? []) engineAHits.push({ ...hit, repo: idx.repoName })
     }
-  }
-  const maxScore = Math.max(...all.map(h => h.score ?? 0), 1e-9)
-  const results = all
-    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
-    .slice(0, 5)
-    .map(h => ({
-      file: h.file,
-      line: h.startLine ?? 1,
-      snippet: h.signature
-        ? `${h.signature}  // L${h.startLine}-${h.endLine} · ${h.kind} ${h.name}`
-        : `${h.kind} ${h.name}`,
-      relevance: Math.max(0, Math.min(1, (h.score ?? 0) / maxScore)),
-      repo: h.repo,
-      name: h.name,
-      kind: h.kind,
-    }))
+  })
+
+  // ── 引擎 B：结构感知搜索（仅图谱就绪的仓库，并行且失败隔离） ──
+  const graphIndexes = indexes.filter(i => i.graphStatus === 'ready')
+  const engineBHits = []
+  const engineBTasks = graphIndexes.map(async (idx) => {
+    const repo = getRepositories(projectId).find(r => r.id === idx.repoId)
+    const project = graphProjectName(repo || { path: idx.repoPath, name: idx.repoName })
+    if (!project) return
+    try {
+      const res = await searchGraphCode(project, query, { limit: 5, repoPath: idx.repoPath })
+      engineBHits.push(...normalizeGraphHits(res, idx.repoName))
+    } catch { /* 引擎 B 不可用 → 自动降级仅用 A */ }
+  })
+
+  await Promise.all([...engineATasks, ...engineBTasks])
+
+  // ── RRF 融合（单路时退化为直接排序） ──
+  const listA = engineAHits.sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+  const listB = engineBHits
+  const fused = reciprocalRankFusion([
+    { source: 'fts-vector', items: listA },
+    { source: 'graph', items: listB },
+  ])
+
+  const maxScore = Math.max(...fused.map(f => f.score), 1e-9)
+  let results = fused.slice(0, 8).map(({ item: h, sources }) => ({
+    file: h.file,
+    line: h.startLine ?? h.line ?? 1,
+    snippet: h.signature
+      ? `${h.signature}  // L${h.startLine ?? h.line ?? 1}-${h.endLine ?? ''} · ${h.kind} ${h.name}`
+      : `${h.kind} ${h.name}`,
+    relevance: Math.max(0, Math.min(1, h.score != null && maxScore > 0 ? (sources.length > 1 ? 1 : 0.5 + 0.5 * ((h.score ?? 0) / (listA[0]?.score ?? 1))) : 0.5)),
+    repo: h.repo,
+    name: h.name,
+    kind: h.kind,
+    sources,
+  }))
+  results = results.slice(0, 5)
+  await enrichWithTrace(results)
+
+  // 融合排序后 relevance 按 RRF 分数归一化（双路命中天然靠前）
+  const maxRRF = Math.max(...fused.slice(0, 5).map(f => f.score), 1e-9)
+  results.forEach((r, i) => {
+    r.relevance = Math.max(0, Math.min(1, fused[i].score / maxRRF))
+  })
+
+  const enginesUsed = [
+    listA.length > 0 ? `A·${backend === 'hybrid' ? 'BM25+向量' : 'BM25'}` : null,
+    listB.length > 0 ? 'B·图谱结构' : null,
+  ].filter(Boolean)
+  const message = enginesUsed.length > 1
+    ? `双引擎融合检索（${enginesUsed.join(' + ')}）命中 ${results.length} 条 · ${durationMs}ms`
+    : `${enginesUsed[0] || '无引擎可用'} 检索命中 ${results.length} 条 · ${durationMs}ms`
   return {
     results,
-    message: `${backend === 'hybrid' ? '混合（BM25+向量）' : 'BM25'} 检索命中 ${results.length} 条 · ${durationMs}ms`,
+    message,
     stats,
     backend,
+    engines: enginesUsed,
   }
 }
 
@@ -397,7 +517,7 @@ async function searchCodebaseTauri(projectId, query, stats) {
 
 /** Whether the real (Rust) code index backs this runtime. */
 export function isTauriCodeIndex() {
-  return detectRuntimeMode() === 'tauri'
+  return true
 }
 
 export async function getCodeIndexStats(repoPath) {
@@ -422,7 +542,6 @@ export async function unwatchCodeIndex(repoPath) {
 
 /** Subscribe to auto-incremental reindex events (`code_index://updated`). */
 export function onCodeIndexUpdated(handler) {
-  if (detectRuntimeMode() !== 'tauri') return () => {}
   const unlistenPromise = tauriListen('code_index://updated', (event) => handler(event.payload))
   return () => {
     unlistenPromise.then((unlisten) => unlisten()).catch(() => {})
@@ -431,7 +550,6 @@ export function onCodeIndexUpdated(handler) {
 
 /** Subscribe to indexing error events (`code_index://error`, emitted by the commit watcher). */
 export function onCodeIndexError(handler) {
-  if (detectRuntimeMode() !== 'tauri') return () => {}
   const unlistenPromise = tauriListen('code_index://error', (event) => handler(event.payload))
   return () => {
     unlistenPromise.then((unlisten) => unlisten()).catch(() => {})

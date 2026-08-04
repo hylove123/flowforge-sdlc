@@ -28,3 +28,6 @@ test-results/
 playwright-report/
 .playwright/
 e2e-artifacts/
+src-tauri/keys/
+src-tauri/bin/
+release-out/

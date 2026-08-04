@@ -126,12 +126,14 @@ export async function buildStageContext(state: SDLCState, node: DagNodeDef): Pro
   const requirement = typeof pkg.requirement === 'string' ? pkg.requirement : ''
 
   // context engine: upstream + knowledge recall + checklist + reflections
+  // + 代码索引上下文（repoPath 由 start_delivery 透传，无索引时该节省略）
   const pack = await buildContextPackage({
     projectId: state.projectId,
     deliveryId: state.deliveryId,
     stageId: node.stageId,
     state,
     dependsOn: node.dependsOn,
+    repoPath: typeof pkg.repoPath === 'string' ? pkg.repoPath : undefined,
   })
 
   return {
@@ -158,6 +160,17 @@ export interface StageNodeDeps {
 }
 
 const DEFAULT_THRESHOLD = 75
+
+/** 2.1 需要工具使用指引的阶段：编码/评审/自测最依赖代码事实。 */
+const TOOL_GUIDED_STAGES = new Set(['dev', 'review', 'auto-test'])
+
+/** 从 toolset 生成工具清单文本（注入生成提示词的【可用工具】段）。 */
+function buildToolGuidance(stage: string, toolset: ToolExecutor | null | undefined): string | undefined {
+  if (!TOOL_GUIDED_STAGES.has(stage) || !toolset || toolset.tools.length === 0) return undefined
+  return toolset.tools
+    .map((t) => `- ${t.function.name}：${t.function.description ?? ''}`)
+    .join('\n')
+}
 
 export function makeStageNode(node: DagNodeDef, deps: StageNodeDeps) {
   const { llm, notify } = deps
@@ -191,6 +204,9 @@ export function makeStageNode(node: DagNodeDef, deps: StageNodeDeps) {
         requirement: ctx.requirement,
         previousContent: ctx.upstream.map((u) => u.content).join('\n\n'),
         contextBlock: ctx.contextBlock || undefined,
+        // 2.2 驳回重试：review 驳回回退后携上轮评审意见重生，而非盲目重试
+        revisionFeedback: state.retryCount > 0 ? state.reviewFeedback ?? undefined : undefined,
+        toolGuidance: buildToolGuidance(stage, deps.toolset),
       })
       content = await generateWithTools(
         llm,
@@ -235,7 +251,17 @@ export function makeStageNode(node: DagNodeDef, deps: StageNodeDeps) {
       review,
       source,
     })
-    notify('graph/stage_done', { ...base, reviewScore: score, passed, source })
+    notify('graph/stage_done', {
+      ...base, reviewScore: score, passed, source,
+      // 交付物回写闭环：前端据此写入 stageDeliverables，无需再轮询 get_state
+      content,
+      review: review ? {
+        totalScore: review.totalScore,
+        passed: review.passed,
+        suggestions: review.suggestions,
+        dimensions: review.dimensions,
+      } : null,
+    })
 
     // ─── Step 5: reflection (Phase 6) — best-effort, silent degrade ───
     let reflection: ReflectionEntry | null = null

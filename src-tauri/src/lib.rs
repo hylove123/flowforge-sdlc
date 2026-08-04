@@ -2,7 +2,7 @@ pub mod commands;
 
 use std::sync::Arc;
 
-use commands::{code_index, git_ops, notify, sidecar, storage, tool_bridge};
+use commands::{code_index, files, git_ops, notify, sidecar, storage, tool_bridge};
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -15,8 +15,10 @@ pub fn run() {
     .manage(git_ops::CodeWatchState::default())
     .plugin(tauri_plugin_clipboard_manager::init())
     .plugin(tauri_plugin_opener::init())
+    .plugin(tauri_plugin_updater::Builder::new().build())
     .plugin(tauri_plugin_notification::init())
     .plugin(tauri_plugin_dialog::init())
+.plugin(tauri_plugin_fs::init())
     .setup(move |app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -49,6 +51,8 @@ pub fn run() {
       sidecar::sidecar_status,
       storage::storage_db_path,
       storage::storage_pragmas,
+      files::fs_write_file,
+      files::fs_read_file,
       tool_bridge::delegate_dispatch,
       tool_bridge::delegate_cancel,
       code_index::code_index_full,

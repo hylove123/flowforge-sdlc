@@ -126,6 +126,11 @@ export const DEFAULT_TIMEOUT_MS = 120_000
 export const DEFAULT_MAX_RETRIES = 2
 export const DEFAULT_RETRY_BASE_DELAY_MS = 1_000
 
+/** Strip trailing slashes so `${endpoint}/chat/completions` never double-slashes. */
+export function normalizeEndpoint(endpoint: string): string {
+  return (endpoint || '').trim().replace(/\/+$/, '')
+}
+
 // ─── OpenAI-compatible client (SSE streaming) ───────────────────
 
 export class OpenAICompatibleClient implements LLMClient {
@@ -139,7 +144,7 @@ export class OpenAICompatibleClient implements LLMClient {
     if (!config || !config.endpoint) throw new Error('模型配置缺少 endpoint')
     if (!config.apiKey) throw new Error('模型配置缺少 apiKey')
     if (!config.modelId) throw new Error('模型配置缺少 modelId')
-    this.config = config
+    this.config = { ...config, endpoint: normalizeEndpoint(config.endpoint) }
     this.fetchImpl = fetchImpl
     this.timeoutMs = config.timeoutMs ?? resilience.timeoutMs ?? DEFAULT_TIMEOUT_MS
     this.maxRetries = resilience.maxRetries ?? DEFAULT_MAX_RETRIES
@@ -402,6 +407,7 @@ export const GENERATION_PROMPTS: Record<string, string> = {
   'prd': '请为以下项目生成PRD(产品需求文档)，包含：功能详细描述、用户故事、交互流程、验收标准、非功能性需求。\n\n项目：{project}\n需求：{requirement}\n前置内容(BRD)：{previousContent}',
   'test': '请根据以下PRD内容生成测试用例，包含：功能测试、边界测试、异常测试。每个用例使用Given-When-Then格式，标注优先级(P0/P1/P2)。\n\n项目：{project}\n需求：{requirement}\nPRD内容：{previousContent}',
   'dev-plan': '请根据以下PRD内容生成技术方案文档(TS)，包含：架构设计、技术选型、数据库设计、API接口定义、技术风险评估。\n\n项目：{project}\n需求：{requirement}\nPRD内容：{previousContent}',
+  'prototype': '请根据以下PRD内容生成一个单文件 HTML 交互原型（线框图风格）。要求：\n1. 输出完整的单个 HTML 文件，所有 CSS 内联在 <style> 中，不依赖任何外部资源；\n2. 线框风格：灰白色调、简洁边框、清晰的信息层级，顶部标注原型标题；\n3. 按 PRD 描述的页面结构组织多个页面，用顶部 tab 切换（纯内联 JS 实现）；\n4. 覆盖 PRD 中的核心页面与关键交互流程，交互控件用占位元素表达；\n5. 只输出 HTML 代码本身，不要任何解释文字。\n\n项目：{project}\n需求：{requirement}\nPRD内容：{previousContent}',
 }
 
 /** AI review scoring prompt — mirrors ai.js STAGE_SYSTEM_PROMPTS.review (the scoring variant). */
@@ -432,12 +438,16 @@ export interface GenerationContext {
   previousContent?: string
   /** Extra context block (upstream deliverables etc.), appended to the user prompt. */
   contextBlock?: string
+  /** 2.2 驳回重试：上轮评审意见，作为「改进要求」注入，避免盲目重试。 */
+  revisionFeedback?: string
+  /** 2.1 工具使用指引：可用工具清单文本，引导模型主动调用代码智能工具。 */
+  toolGuidance?: string
 }
 
 export function buildGenerationMessages(stageId: string, ctx: GenerationContext): ChatMessage[] {
   const systemPrompt = STAGE_SYSTEM_PROMPTS[stageId] || STAGE_SYSTEM_PROMPTS.chat
   const template = GENERATION_PROMPTS[stageId]
-    || `请为项目"{project}"生成阶段"${stageId}"的交付物。需求：{requirement}\n前置内容：{previousContent}`
+    || `请为项目"{project}"生成阶段"{stageId}"的交付物。需求：{requirement}\n前置内容：{previousContent}`
   let userPrompt = template
     .replace('{project}', ctx.projectName)
     .replace('{requirement}', ctx.requirement)
@@ -445,6 +455,14 @@ export function buildGenerationMessages(stageId: string, ctx: GenerationContext)
 
   if (ctx.contextBlock) {
     userPrompt += `\n\n【上游交付物上下文】\n以下是之前阶段的已产出交付物，请确保生成的内容与它们保持一致性，并建立追溯关系：\n\n${ctx.contextBlock}`
+  }
+
+  if (ctx.revisionFeedback) {
+    userPrompt += `\n\n【改进要求】\n上一轮交付未通过评审，请针对以下评审意见逐条改进，并在交付物中体现修改点：\n${ctx.revisionFeedback}`
+  }
+
+  if (ctx.toolGuidance) {
+    userPrompt += `\n\n【可用工具】\n生成前建议先调用工具获取事实依据（代码检索/知识召回），避免凭空臆造：\n${ctx.toolGuidance}`
   }
 
   return [
@@ -494,4 +512,89 @@ export async function reviewDeliverable(
     { temperature: 0.3, maxTokens: 2048, ...options, meta: { ...options.meta, kind: 'review' } }
   )
   return parseReviewResult(raw)
+}
+
+// ─── Connection test (llm.connect_test RPC) ───────────────────
+
+export interface ConnectTestResult {
+  success: boolean
+  message: string
+  category?: 'ok' | 'config' | 'timeout' | 'network' | 'http_4xx' | 'http_5xx'
+  status?: number
+}
+
+/**
+ * Minimal chat/completions probe for the "测试连接" button.
+ * Runs in the sidecar (Node) — unlike the renderer process there is no
+ * CORS preflight, which was the root cause of the old "网络错误" reports.
+ */
+export async function testModelConnection(
+  config: Pick<ModelConfig, 'endpoint' | 'apiKey' | 'modelId'>,
+  fetchImpl: FetchLike = fetch,
+  timeoutMs = 15_000
+): Promise<ConnectTestResult> {
+  const endpoint = normalizeEndpoint(config?.endpoint ?? '')
+  if (!config?.apiKey) return { success: false, message: '未配置 Token', category: 'config' }
+  if (!endpoint) return { success: false, message: '未配置 API 地址', category: 'config' }
+  if (!config?.modelId) return { success: false, message: '未配置模型名称', category: 'config' }
+
+  const ctl = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => { timedOut = true; ctl.abort() }, timeoutMs)
+  try {
+    const response = await fetchImpl(`${endpoint}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: config.modelId,
+        messages: [{ role: 'user', content: 'Hi' }],
+        max_tokens: 5,
+      }),
+      signal: ctl.signal,
+    })
+
+    if (response.ok) return { success: true, message: '连接成功，模型可用', category: 'ok' }
+
+    const errText = await response.text()
+    let errMsg = `API 请求失败 (${response.status})`
+    try {
+      const errJson = JSON.parse(errText)
+      errMsg = errJson.error?.message || errMsg
+    } catch { /* use default */ }
+    const status = response.status
+    const hint = status === 401 || status === 403
+      ? '（Token 无效或无权限）'
+      : status === 404
+        ? '（地址或模型名称可能不正确）'
+        : ''
+    return {
+      success: false,
+      message: errMsg + hint,
+      category: status >= 500 ? 'http_5xx' : 'http_4xx',
+      status,
+    }
+  } catch (err) {
+    if (timedOut) {
+      return { success: false, message: `连接超时（${Math.round(timeoutMs / 1000)} 秒内无响应）`, category: 'timeout' }
+    }
+    const detail = err instanceof Error ? err.message : String(err)
+    return {
+      success: false,
+      message: `网络层失败：${detail}（请检查域名可达性/代理设置）`,
+      category: 'network',
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** JSON-RPC surface: frontend model-config page routes its connectivity probe here. */
+export const llmMethods = {
+  'llm.connect_test': async (params: unknown): Promise<ConnectTestResult> => {
+    const cfg = (params ?? {}) as Pick<ModelConfig, 'endpoint' | 'apiKey' | 'modelId'>
+    return testModelConnection(cfg)
+  },
 }

@@ -6,7 +6,7 @@ import {
 import { useApp } from '@/context/AppContext'
 import { streamStageChat, hasAPIKey } from '@/services/ai'
 import { hasProjectIndex } from '@/services/codebaseIndex'
-import { getAIContext } from '@/services/graph'
+import { getUpstreamContext } from '@/services/knowledge'
 import { storage } from '@/adapters/StorageService'
 
 // ─── Chat session persistence (Phase 2a) ──────────────────────
@@ -214,7 +214,7 @@ export default function AiChatPanel({ open, onClose, currentStage, projectName, 
       // ─── Knowledge graph context injection ───
       let graphContext = null
       if (projectId && currentStage?.id) {
-        graphContext = getAIContext(projectId, currentStage.id, null, flowConfig)
+        graphContext = await getUpstreamContext(projectId, currentStage.id, null, flowConfig)
       }
 
       const stream = streamStageChat(msgText, apiHistory, currentStage?.id, modelOverride, graphContext)

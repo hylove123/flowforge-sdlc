@@ -1,0 +1,11 @@
+{
+  "version": "0.1.0",
+  "notes": "FlowForge 十项改进首个发布版本",
+  "pub_date": "2025-01-01T00:00:00Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSVlhIdjdrQ24xRDZIRUxFS2hLUXFhazgwTzNqcHdWODVjY2h5R1ZjUHlCQUJISlNTTHdaR2lHaFVzSC9meGFxQVI3RkNvdk83K1o1U3Q4dWtNSWxUSW40S3N2dFIyMnc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1NzM2NDM3CWZpbGU6Rmxvd0ZvcmdlLmFwcC50YXIuZ3oKbTd3QjRXcEdmemVEVWhpV201dXpCVVgvVnNONU9oajZXUXREWlBjZm14Q2NFbXdvM2NtNzBnZHV6OVV1MVl2M0RUUWdDZHpTOThhWE9oOUxFbVhlQ0E9PQo=",
+      "url": "https://github.com/hylove123/flowforge-sdlc/releases/latest/download/FlowForge.app.tar.gz"
+    }
+  }
+}

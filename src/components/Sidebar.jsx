@@ -1,18 +1,33 @@
 import React, { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
-  LayoutDashboard, FolderKanban, GitBranch, Bot, BookOpen, Brain, Settings, ChevronLeft, ChevronRight, Settings2, Workflow
+  LayoutDashboard, FolderKanban, GitBranch, Bot, BookOpen, Brain, Settings, ChevronLeft, ChevronRight
 } from 'lucide-react'
 
-const navItems = [
-  { path: '/', icon: LayoutDashboard, label: '工作台' },
-  { path: '/projects', icon: FolderKanban, label: '项目' },
-  { path: '/pipeline', icon: GitBranch, label: '交付流' },
-  { path: '/flow-editor', icon: Workflow, label: '流程编排' },
-  { path: '/agents', icon: Bot, label: '智能体' },
-  { path: '/project-config', icon: Settings2, label: '配置中心' },
-  { path: '/knowledge', icon: BookOpen, label: '知识库' },
-  { path: '/models', icon: Brain, label: '模型配置' },
+// 3.2 信息架构收敛：「交付」为主区，「配置」为次区，「知识」独立；
+// 流程编排（低频）不再占一级导航，入口收敛到项目配置与 Cmd+K 面板
+const navGroups = [
+  {
+    label: '交付',
+    items: [
+      { path: '/', icon: LayoutDashboard, label: '仪表盘' },
+      { path: '/pipeline', icon: GitBranch, label: '流水线' },
+    ],
+  },
+  {
+    label: '配置',
+    items: [
+      { path: '/projects', icon: FolderKanban, label: '项目' },
+      { path: '/agents', icon: Bot, label: '智能体' },
+      { path: '/models', icon: Brain, label: '模型配置' },
+    ],
+  },
+  {
+    label: '知识',
+    items: [
+      { path: '/knowledge', icon: BookOpen, label: '知识库' },
+    ],
+  },
 ]
 
 const bottomItems = [
@@ -38,17 +53,21 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="sidebar-nav">
-        {!collapsed && <div className="sidebar-section-label">主菜单</div>}
-        {navItems.map(item => (
-          <NavLink
-            key={item.path}
-            to={item.path}
-            className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}
-            title={collapsed ? item.label : undefined}
-          >
-            <item.icon size={18} />
-            {!collapsed && <span>{item.label}</span>}
-          </NavLink>
+        {navGroups.map(group => (
+          <React.Fragment key={group.label}>
+            {!collapsed && <div className="sidebar-section-label">{group.label}</div>}
+            {group.items.map(item => (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}
+                title={collapsed ? item.label : undefined}
+              >
+                <item.icon size={18} />
+                {!collapsed && <span>{item.label}</span>}
+              </NavLink>
+            ))}
+          </React.Fragment>
         ))}
       </nav>
 

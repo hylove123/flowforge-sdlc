@@ -1,18 +1,14 @@
 import React, { useState, useEffect } from 'react'
 import {
-  Send, BookOpen, RefreshCw,
+  Send, BookOpen,
   GitBranch, FolderTree, ChevronDown, Search, Code2, Database, FileCode, Loader2,
 } from 'lucide-react'
 import { useApp } from '@/context/AppContext'
-import { useSidecar } from '@/context/SidecarContext'
 import ConfigScopeBanner from '@/components/ConfigScopeBanner'
 import {
-  getIndexes, hasProjectIndex, getProjectIndexStats, searchCodebase,
-  isTauriCodeIndex, getCodeIndexStats, rebuildCodeIndex,
-  watchCodeIndex, unwatchCodeIndex, onCodeIndexUpdated,
+  hasProjectIndex, getProjectIndexStats, searchCodebase,
 } from '@/services/codebaseIndex'
-import { getRepositories } from '@/services/repository'
-import { searchGraph as searchGraphLocal, getGraphStats as getGraphStatsLocal } from '@/services/graph'
+import { searchKnowledge, getKnowledgeStats } from '@/services/knowledge'
 
 // ISO 时间 → 本地可读时间；无索引时显示「未索引」
 function formatIndexTime(iso) {
@@ -24,118 +20,32 @@ function formatIndexTime(iso) {
   } catch { return '未索引' }
 }
 
-const WEB_INDEX_STATUS_META = {
-  ready: { label: '已索引', badge: 'status-complete' },
-  indexing: { label: '索引中', badge: 'status-progress' },
-  error: { label: '索引失败', badge: 'status-pending' },
-  none: { label: '未索引', badge: 'status-pending' },
-}
-
 export default function KnowledgeBase() {
   const [inputValue, setInputValue] = useState('')
   const [activeTab, setActiveTab] = useState('chat')
   const { currentProject, currentUser, showToast } = useApp()
-  const { mode: sidecarMode, isReady: sidecarReady, invoke: sidecarInvoke } = useSidecar()
 
   // 智能问答对话记录 — 尚未接入真实问答能力，初始为空（空态引导），
   // 不再展示任何演示性预置问答
   const [chatHistory] = useState([])
 
-  // Knowledge graph state — tauri mode reads the sidecar knowledge layer,
-  // web mode keeps the localStorage-backed graph.js behavior
+  // Knowledge graph state — 纯客户端：统一走 sidecar 知识层（SQLite WAL + 向量检索）
   const [kgQuery, setKgQuery] = useState('')
   const [kgResults, setKgResults] = useState(null)
   const [kgSearching, setKgSearching] = useState(false)
   const [kgStats, setKgStats] = useState(null)
-  const useSidecarKnowledge = sidecarMode === 'tauri' && sidecarReady
 
-  // Codebase search state
+  // Codebase search state (index management itself lives in 项目中心 → 索引管理)
   const [codeQuery, setCodeQuery] = useState('')
   const [codeResults, setCodeResults] = useState(null)
   const [searching, setSearching] = useState(false)
   const [indexStats, setIndexStats] = useState(null)
   const [indexReady, setIndexReady] = useState(false)
-  const [projectIndexes, setProjectIndexes] = useState([]) // real per-repo index records
-
-  // Real code-index management state (tauri mode only)
-  const useTauriIndex = isTauriCodeIndex()
-  const [repoIndexRows, setRepoIndexRows] = useState([]) // [{repo, stats}]
-  const [rebuilding, setRebuilding] = useState(false)
-  const [watched, setWatched] = useState({}) // repoPath -> bool
-  const [idxRefreshTick, setIdxRefreshTick] = useState(0)
-
-  useEffect(() => {
-    if (!useTauriIndex || activeTab !== 'index' || !currentProject) return undefined
-    let cancelled = false
-    const load = async () => {
-      const repos = getRepositories(currentProject.id).filter(r => r.path)
-      const rows = await Promise.all(repos.map(async (repo) => {
-        try {
-          return { repo, stats: await getCodeIndexStats(repo.path) }
-        } catch {
-          return { repo, stats: null }
-        }
-      }))
-      if (!cancelled) setRepoIndexRows(rows)
-    }
-    load()
-    // auto-incremental reindex (commit watcher) → refresh the stats
-    const off = onCodeIndexUpdated(() => setIdxRefreshTick(t => t + 1))
-    return () => { cancelled = true; off() }
-  }, [useTauriIndex, activeTab, currentProject, idxRefreshTick])
-
-  const handleRebuildIndex = async () => {
-    const repos = repoIndexRows.map(r => r.repo)
-    if (repos.length === 0) {
-      showToast('请先在「项目配置」中添加含本地路径的仓库', 'error')
-      return
-    }
-    setRebuilding(true)
-    try {
-      for (const repo of repos) {
-        const summary = await rebuildCodeIndex(repo.path)
-        showToast(`${repo.name}：${summary.files} 文件 / ${summary.symbols} 符号 · ${summary.durationMs}ms`, 'success')
-      }
-      setIdxRefreshTick(t => t + 1)
-    } catch (e) {
-      showToast(`重建索引失败：${e?.message || e}`, 'error')
-    }
-    setRebuilding(false)
-  }
-
-  // CommandPalette 快捷动作「重建索引」→ 切到索引页签并触发重建
-  useEffect(() => {
-    const onRebuild = () => {
-      if (!useTauriIndex) return
-      setActiveTab('index')
-      handleRebuildIndex()
-    }
-    window.addEventListener('flowforge:rebuild-index', onRebuild)
-    return () => window.removeEventListener('flowforge:rebuild-index', onRebuild)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [useTauriIndex, repoIndexRows])
-
-  const handleToggleWatch = async (repoPath) => {
-    try {
-      if (watched[repoPath]) {
-        await unwatchCodeIndex(repoPath)
-        setWatched(w => ({ ...w, [repoPath]: false }))
-        showToast('已停止增量监听', 'info')
-      } else {
-        await watchCodeIndex(repoPath)
-        setWatched(w => ({ ...w, [repoPath]: true }))
-        showToast('已开启 commit 监听，变更后自动增量索引', 'success')
-      }
-    } catch (e) {
-      showToast(`监听切换失败：${e?.message || e}`, 'error')
-    }
-  }
 
   useEffect(() => {
     if (currentProject) {
       setIndexReady(hasProjectIndex(currentProject.id))
       setIndexStats(getProjectIndexStats(currentProject.id))
-      setProjectIndexes(getIndexes(currentProject.id))
     }
   }, [currentProject, activeTab])
 
@@ -144,37 +54,27 @@ export default function KnowledgeBase() {
     let cancelled = false
     const load = async () => {
       try {
-        const stats = useSidecarKnowledge
-          ? await sidecarInvoke('knowledge.stats', { projectId: currentProject.id })
-          : getGraphStatsLocal(currentProject.id)
+        const stats = await getKnowledgeStats(currentProject.id)
         if (!cancelled) setKgStats(stats)
-      } catch {
-        if (!cancelled) setKgStats(null) // knowledge layer unavailable — show placeholder
+      } catch (e) {
+        if (!cancelled) {
+          setKgStats(null)
+          showToast(`知识层加载失败：${e?.message || e}`, 'error')
+        }
       }
     }
     load()
     return () => { cancelled = true }
-  }, [currentProject, activeTab, useSidecarKnowledge, sidecarInvoke])
+  }, [currentProject, activeTab])
 
-  const handleKgSearch = async () => {
-    if (!kgQuery.trim() || !currentProject) return
+  const handleKgSearch = async (override) => {
+    const q = (override ?? kgQuery).trim()
+    if (!q || !currentProject) return
+    if (override !== undefined) setKgQuery(override)
     setKgSearching(true)
     setKgResults(null)
     try {
-      if (useSidecarKnowledge) {
-        const res = await sidecarInvoke('knowledge.search', { projectId: currentProject.id, query: kgQuery })
-        setKgResults((res?.results ?? []).map(r => ({
-          id: r.entityId, label: r.label, type: r.type, stageId: r.stageId,
-          snippet: r.snippet, relationCount: r.relationCount, score: r.score,
-        })))
-      } else {
-        const res = searchGraphLocal(kgQuery, currentProject.id)
-        setKgResults(res.map(r => ({
-          id: r.entity.id, label: r.entity.label, type: r.entity.concept, stageId: r.entity.stage,
-          snippet: String(r.entity.properties?.content ?? '').slice(0, 300),
-          relationCount: r.relationCount, score: null,
-        })))
-      }
+      setKgResults(await searchKnowledge(q, currentProject.id))
     } catch (e) {
       showToast(`图谱搜索失败：${e?.message || e}`, 'error')
       setKgResults([])
@@ -190,15 +90,17 @@ export default function KnowledgeBase() {
     }
   }
 
-  const handleCodeSearch = async () => {
-    if (!codeQuery.trim()) return
+  const handleCodeSearch = async (override) => {
+    const q = (override ?? codeQuery).trim()
+    if (!q) return
     if (!indexReady) {
-      showToast('请先在「项目配置 → 代码索引」中建立索引', 'error')
+      showToast('请先在「项目中心 → 索引管理」中建立索引', 'error')
       return
     }
+    if (override !== undefined) setCodeQuery(override)
     setSearching(true)
     setCodeResults(null)
-    const results = await searchCodebase(currentProject.id, codeQuery)
+    const results = await searchCodebase(currentProject.id, q)
     setCodeResults(results)
     setSearching(false)
   }
@@ -219,10 +121,6 @@ export default function KnowledgeBase() {
         <div className={`tab-item ${activeTab === 'graph' ? 'active' : ''}`}
           onClick={() => setActiveTab('graph')}>
           代码图谱
-        </div>
-        <div className={`tab-item ${activeTab === 'index' ? 'active' : ''}`}
-          onClick={() => setActiveTab('index')}>
-          索引管理
         </div>
         <div className={`tab-item ${activeTab === 'code-search' ? 'active' : ''}`}
           onClick={() => setActiveTab('code-search')}>
@@ -355,7 +253,7 @@ export default function KnowledgeBase() {
                 </div>
               ) : (
                 <div style={{ fontSize: '12px', color: 'var(--fg-tertiary)', lineHeight: 1.7 }}>
-                  尚未建立索引，请前往「项目配置 → 代码索引」建立
+                  尚未建立索引，请前往「项目中心 → 索引管理」建立
                 </div>
               )}
             </div>
@@ -365,15 +263,13 @@ export default function KnowledgeBase() {
 
       {activeTab === 'graph' && (
         <div>
-          {/* Graph stats — real data from sidecar (tauri) or graph.js (web) */}
+          {/* Graph stats — sidecar 知识层（SQLite WAL + 向量检索） */}
           <div className="card" style={{ padding: '16px 20px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
             <GitBranch size={18} style={{ color: 'var(--color-ai-review)', flexShrink: 0 }} />
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: '13px', fontWeight: 510 }}>「{currentProject.name}」知识图谱</div>
               <div style={{ fontSize: '12px', color: 'var(--fg-tertiary)' }}>
-                {useSidecarKnowledge
-                  ? `sidecar 知识层 · 检索后端：${kgStats?.backend === 'vector' ? '向量' : 'BM25'}${kgStats ? ` · ${kgStats.chunks ?? 0} 个知识块` : ''}`
-                  : '浏览器本地图谱（localStorage）'}
+                {`sidecar 知识层 · 检索后端：${kgStats?.backend === 'vector' ? '向量' : 'BM25'}${kgStats ? ` · ${kgStats.chunks ?? 0} 个知识块` : ''}`}
               </div>
             </div>
             <div style={{ display: 'flex', gap: '16px' }}>
@@ -450,132 +346,6 @@ export default function KnowledgeBase() {
         </div>
       )}
 
-      {activeTab === 'index' && useTauriIndex && (
-        <div className="card">
-          <div className="card-header">
-            <h4 className="card-title">索引管理（tree-sitter 真实索引）</h4>
-            <button className="btn btn-secondary" onClick={handleRebuildIndex} disabled={rebuilding}>
-              {rebuilding ? <Loader2 size={14} className="ff-spin" /> : <RefreshCw size={14} />}
-              {rebuilding ? '索引中…' : '重建索引'}
-            </button>
-          </div>
-          {repoIndexRows.length === 0 ? (
-            <div style={{ padding: '32px', textAlign: 'center', fontSize: '13px', color: 'var(--fg-tertiary)' }}>
-              当前项目没有配置本地路径仓库，请先在「项目配置 → 代码仓库」添加
-            </div>
-          ) : (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>仓库</th>
-                  <th>文件数</th>
-                  <th>符号数</th>
-                  <th>关系数</th>
-                  <th>语言</th>
-                  <th>最近索引</th>
-                  <th>增量监听</th>
-                </tr>
-              </thead>
-              <tbody>
-                {repoIndexRows.map(({ repo, stats }) => (
-                  <tr key={repo.id}>
-                    <td style={{ fontWeight: 510, fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>{repo.name}</td>
-                    <td style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>{stats?.exists ? stats.files : '—'}</td>
-                    <td style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>{stats?.exists ? stats.symbols : '—'}</td>
-                    <td style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>{stats?.exists ? stats.relations : '—'}</td>
-                    <td style={{ fontSize: '12px' }}>{stats?.exists ? (stats.languages ?? []).join(', ') : '—'}</td>
-                    <td style={{ fontSize: '12px' }}>
-                      {stats?.lastIndexedAt ? new Date(stats.lastIndexedAt).toLocaleString() : '未索引'}
-                    </td>
-                    <td>
-                      <button
-                        className={`btn ${watched[repo.path] ? 'btn-primary' : 'btn-secondary'}`}
-                        style={{ padding: '2px 10px', fontSize: '12px' }}
-                        onClick={() => handleToggleWatch(repo.path)}
-                      >
-                        {watched[repo.path] ? '监听中' : '开启'}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-
-      {activeTab === 'index' && !useTauriIndex && (
-        <div className="card">
-          <div className="card-header">
-            <h4 className="card-title">索引管理</h4>
-            <button className="btn btn-secondary" onClick={() => showToast('浏览器模式请前往「项目配置 → 代码索引」重建索引', 'info')}>
-              <RefreshCw size={14} /> 重新索引
-            </button>
-          </div>
-          {projectIndexes.length === 0 ? (
-            <div style={{ padding: '32px', textAlign: 'center', fontSize: '13px', color: 'var(--fg-tertiary)' }}>
-              尚未建立索引，请前往「项目配置 → 代码索引」为仓库建立索引
-            </div>
-          ) : (
-            <>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginBottom: '24px' }}>
-                <div className="kpi-card">
-                  <div className="kpi-label">索引状态</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span className={`status-badge ${projectIndexes.every(i => i.status === 'ready') ? 'status-complete' : 'status-progress'}`}>
-                      <span className="status-dot"></span>
-                      {projectIndexes.every(i => i.status === 'ready')
-                        ? '全部就绪'
-                        : `${projectIndexes.filter(i => i.status === 'ready').length}/${projectIndexes.length} 就绪`}
-                    </span>
-                  </div>
-                </div>
-                <div className="kpi-card">
-                  <div className="kpi-label">索引范围</div>
-                  <div style={{ fontSize: '14px', fontWeight: 510 }}>{projectIndexes.length} 个仓库</div>
-                </div>
-                <div className="kpi-card">
-                  <div className="kpi-label">最后索引</div>
-                  <div style={{ fontSize: '14px', fontWeight: 510, fontFamily: 'JetBrains Mono, monospace' }}>
-                    {formatIndexTime(indexStats?.lastIndexed)}
-                  </div>
-                </div>
-              </div>
-              <h5 style={{ marginBottom: '12px' }}>仓库索引详情</h5>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>仓库</th>
-                    <th>文件数</th>
-                    <th>代码块</th>
-                    <th>最后索引</th>
-                    <th>状态</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {projectIndexes.map((idx) => {
-                    const meta = WEB_INDEX_STATUS_META[idx.status] || WEB_INDEX_STATUS_META.none
-                    return (
-                      <tr key={idx.id}>
-                        <td style={{ fontWeight: 510, fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>{idx.repoName}</td>
-                        <td style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>{idx.fileCount}</td>
-                        <td style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>{idx.chunks}</td>
-                        <td style={{ fontSize: '12px' }}>{formatIndexTime(idx.lastIndexed)}</td>
-                        <td>
-                          <span className={`status-badge ${meta.badge}`}>
-                            <span className="status-dot"></span>
-                            {meta.label}
-                          </span>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </>
-          )}
-        </div>
-      )}
 
       {/* Codebase Search Tab */}
       {activeTab === 'code-search' && (
@@ -597,7 +367,7 @@ export default function KnowledgeBase() {
               <div style={{ fontSize: '12px', color: 'var(--fg-tertiary)' }}>
                 {indexReady && indexStats
                   ? `已索引 ${indexStats.repoCount} 个仓库，共 ${indexStats.totalFiles} 个文件，${indexStats.totalChunks} 个代码块 · 语言：${indexStats.languages.join(', ')}`
-                  : '请前往「项目配置 → 代码索引」建立索引后使用代码搜索'
+                  : '请前往「项目中心 → 索引管理」建立索引后使用代码搜索'
                 }
               </div>
             </div>
@@ -638,6 +408,21 @@ export default function KnowledgeBase() {
                     <FileCode size={14} style={{ color: 'var(--color-ai-review)' }} />
                     <code style={{ fontSize: '12px', fontWeight: 510, color: 'var(--fg)' }}>{result.file}</code>
                     <span style={{ fontSize: '11px', color: 'var(--fg-muted)' }}>:{result.line}</span>
+                    {/* 双引擎来源标注（t3：fts-vector = 引擎A，graph = 引擎B） */}
+                    {(result.sources || []).map(src => (
+                      <span key={src} style={{
+                        fontSize: '10px', padding: '1px 6px', borderRadius: '9999px', fontWeight: 510,
+                        background: src === 'graph'
+                          ? 'color-mix(in srgb, var(--color-ai-review) 10%, transparent)'
+                          : 'color-mix(in srgb, var(--color-progress) 10%, transparent)',
+                        color: src === 'graph' ? 'var(--color-ai-review)' : 'var(--color-progress)'
+                      }}>
+                        {src === 'graph' ? '图谱' : 'FTS/向量'}
+                      </span>
+                    ))}
+                    {result.trace && (
+                      <span style={{ fontSize: '10px', color: 'var(--fg-muted)' }}>{result.trace}</span>
+                    )}
                     <span style={{
                       fontSize: '10px', padding: '1px 6px', borderRadius: '9999px',
                       background: 'color-mix(in srgb, var(--color-success) 10%, transparent)',
@@ -666,7 +451,8 @@ export default function KnowledgeBase() {
                 输入关键词搜索代码
               </div>
               <div style={{ fontSize: '12px', color: 'var(--fg-tertiary)' }}>
-                基于已建立的代码索引，支持函数名、文件路径、代码片段搜索
+                基于双引擎代码索引（FTS/向量 + 图谱结构）的 RRF 融合检索，支持函数名、文件路径、代码片段搜索；
+                也可在「代码图谱」Tab 中查看调用关系与跨服务依赖
               </div>
             </div>
           )}

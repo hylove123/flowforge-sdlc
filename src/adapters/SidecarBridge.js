@@ -1,13 +1,10 @@
 /**
- * SidecarBridge — unified RPC entry point to the (future) local sidecar
+ * SidecarBridge — unified RPC entry point to the local sidecar
  *
- * Phase 0 of the Tauri evolution plan: establishes the single invoke()
- * call site. In web mode all calls are mocked; in tauri mode calls are
- * forwarded to the Rust shell via `sidecar_request` (Phase 1 wires the
- * actual command handler).
+ * Pure client platform: calls are always forwarded to the Rust shell
+ * via `sidecar_request` (JSON-RPC over the managed sidecar process).
  */
 
-import { detectRuntimeMode } from '@/adapters/StorageService'
 import { invoke as tauriInvoke } from '@tauri-apps/api/core'
 import { listen as tauriListen } from '@tauri-apps/api/event'
 
@@ -16,28 +13,6 @@ let requestSeq = 0
 function nextRequestId() {
   requestSeq += 1
   return `req_${Date.now().toString(36)}_${requestSeq}`
-}
-
-// ─── Web implementation (mock) ──────────────────────────────────
-
-function createWebBridge() {
-  return {
-    mode: 'web',
-
-    async invoke(method, params = {}) {
-      console.debug('[SidecarBridge:web] invoke (mocked)', method, params)
-      if (method === 'ping') {
-        return { ok: true, data: 'pong', mock: true }
-      }
-      return { ok: false, error: 'sidecar_unavailable_in_web_mode' }
-    },
-
-    /** No-op in web mode; returns an unsubscribe function for API parity */
-    onEvent(eventName, handler) {
-      console.debug('[SidecarBridge:web] onEvent (no-op)', eventName)
-      return () => {}
-    },
-  }
 }
 
 // ─── Tauri implementation ───────────────────────────────────────
@@ -78,8 +53,8 @@ function createTauriBridge() {
 /** Name of the Tauri event carrying sidecar JSON-RPC notifications. */
 export const SIDECAR_EVENT = 'sidecar://event'
 
-export function createSidecarBridge(mode = detectRuntimeMode()) {
-  return mode === 'tauri' ? createTauriBridge() : createWebBridge()
+export function createSidecarBridge(_mode = 'tauri') {
+  return createTauriBridge()
 }
 
 export const sidecar = createSidecarBridge()

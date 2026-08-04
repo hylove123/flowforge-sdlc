@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   FolderKanban, Plus,
@@ -6,20 +6,75 @@ import {
   FileText as FileTextIcon, Clock, X, MessageSquare
 } from 'lucide-react'
 import { useApp } from '@/context/AppContext'
+import { useSidecar } from '@/context/SidecarContext'
+import { createGraphRuntime } from '@/services/graphRuntime'
 import AiChatPanel from '@/components/AiChatPanel'
 import FlywheelPanel from '@/components/FlywheelPanel'
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const { projects, currentProject, currentUser, showToast, addProject, users, deliveries, stageNames, createDelivery } = useApp()
+  const {
+    projects, currentProject, currentUser, showToast, addProject, users,
+    deliveries, createDelivery,
+    stageDeliverables, getProjectStageList,
+  } = useApp()
+
+  // ─── 交付驾驶舱：各项目真实阶段列表（不再硬编码 8/9 阶段）───
+  const stageListByProject = useMemo(() => {
+    const map = {}
+    for (const p of projects) map[p.id] = getProjectStageList(p)
+    return map
+  }, [projects, getProjectStageList])
+  const stagesFor = (d) => stageListByProject[d.projectId] || []
+  const isDeliveryCompleted = (d) => d.currentStageIndex >= Math.max(stagesFor(d).length - 1, 0)
+
+  // ─── 执行引擎全局监听：任意页面感知门禁等待/执行进度 ───
+  const sidecarApi = useSidecar()
+  const graphRt = useMemo(() => createGraphRuntime(sidecarApi), [sidecarApi])
+  const [interruptedThreads, setInterruptedThreads] = useState(() => new Set())
+  useEffect(() => {
+    if (!graphRt.available) return undefined
+    return graphRt.onGraphEvent((payload) => {
+      const threadId = payload?.params?.threadId
+      if (!threadId) return
+      if (payload.method === 'graph/interrupted') {
+        setInterruptedThreads(prev => new Set(prev).add(threadId))
+      } else if (payload.method === 'graph/completed' || payload.method === 'graph/error') {
+        setInterruptedThreads(prev => {
+          if (!prev.has(threadId)) return prev
+          const next = new Set(prev)
+          next.delete(threadId)
+          return next
+        })
+      }
+    })
+  }, [graphRt])
+  const threadIdForDelivery = (d) => `${d.projectId}_${d.id}`
+  const isAwaitingGate = (d) => interruptedThreads.has(threadIdForDelivery(d))
 
   // ─── KPIs derived from real state (no hardcoded demo numbers) ───
-  const runningAgents = projects.reduce((n, p) => n + (p.agents || []).filter(a => a.status === 'running').length, 0)
+  const inProgressDeliveries = deliveries.filter(d => !d.archived && !isDeliveryCompleted(d))
+  const waitingGateCount = deliveries.filter(d => !d.archived && isAwaitingGate(d)).length
+  const qualityScores = []
+  for (const stageMap of Object.values(stageDeliverables || {})) {
+    for (const sd of Object.values(stageMap || {})) {
+      if (sd?.review && typeof sd.review.totalScore === 'number') qualityScores.push(sd.review.totalScore)
+    }
+  }
+  const avgQuality = qualityScores.length
+    ? Math.round(qualityScores.reduce((a, b) => a + b, 0) / qualityScores.length)
+    : null
+  const weekAgo = Date.now() - 7 * 86400000
+  const completedThisWeek = deliveries.filter(d => {
+    if (d.archived || !isDeliveryCompleted(d)) return false
+    const ts = d.completedAt || d.updatedAt || d.createdAt
+    return !ts || new Date(ts).getTime() >= weekAgo
+  })
   const kpis = [
-    { label: '活跃项目', value: String(projects.filter(p => p.status === 'active').length), suffix: '个' },
-    { label: '待评审任务', value: String(deliveries.filter(d => d.currentStageIndex < 8).length), suffix: '个' },
-    { label: '智能体运行中', value: String(runningAgents), suffix: '个' },
-    { label: '本周交付', value: String(deliveries.filter(d => d.currentStageIndex >= 8).length), suffix: '次' },
+    { label: '进行中交付', value: String(inProgressDeliveries.length), suffix: '条' },
+    { label: '等待人工确认门禁', value: String(waitingGateCount), suffix: '个' },
+    { label: '平均质量分', value: avgQuality === null ? '—' : String(avgQuality), suffix: avgQuality === null ? '' : '分' },
+    { label: '本周完成交付', value: String(completedThisWeek.length), suffix: '条' },
   ]
 
   // ─── Dialog state ──────────────────────────────────────────────
@@ -75,16 +130,8 @@ export default function Dashboard() {
       skills: [],
       rules: [],
       mcpTools: [],
-      modelMatrix: [
-        { stage: '需求分析', genModel: 'GPT-4o', reviewModel: 'GPT-4o-mini', genTemp: 0.7, reviewTemp: 0.3, tokens: '0', avgTime: '—', passRate: '—', status: 'connected' },
-        { stage: 'BRD生成', genModel: 'GPT-4o', reviewModel: 'GPT-4o-mini', genTemp: 0.7, reviewTemp: 0.3, tokens: '0', avgTime: '—', passRate: '—', status: 'connected' },
-        { stage: 'PRD生成', genModel: 'GPT-4o', reviewModel: 'GPT-4o-mini', genTemp: 0.6, reviewTemp: 0.3, tokens: '0', avgTime: '—', passRate: '—', status: 'connected' },
-        { stage: '测试用例', genModel: 'GPT-4o', reviewModel: 'GPT-4o-mini', genTemp: 0.5, reviewTemp: 0.2, tokens: '0', avgTime: '—', passRate: '—', status: 'connected' },
-        { stage: '开发方案', genModel: 'GPT-4o', reviewModel: 'GPT-4o-mini', genTemp: 0.6, reviewTemp: 0.3, tokens: '0', avgTime: '—', passRate: '—', status: 'connected' },
-        { stage: '开发', genModel: 'GPT-4o', reviewModel: '—', genTemp: 0.3, reviewTemp: null, tokens: '0', avgTime: '—', passRate: '—', status: 'connected' },
-        { stage: 'Code Review', genModel: 'GPT-4o', reviewModel: '—', genTemp: 0.3, reviewTemp: null, tokens: '0', avgTime: '—', passRate: '—', status: 'connected' },
-        { stage: '自动化测试', genModel: 'GPT-4o', reviewModel: '—', genTemp: 0.2, reviewTemp: null, tokens: '0', avgTime: '—', passRate: '—', status: 'connected' },
-      ],
+      // 模型矩阵由阶段配置（模型配置页）真实驱动，不再预填硬编码模型
+      modelMatrix: [],
       reviewGates: [
         { stage: '需求分析', aiReview: true, humanReview: true, manualTrigger: true, threshold: 80 },
         { stage: 'BRD', aiReview: true, humanReview: true, manualTrigger: true, threshold: 80 },
@@ -170,7 +217,6 @@ export default function Dashboard() {
   }, [projects])
 
   const activities = currentProject.activities || []
-  const projectDeliveries = deliveries.filter(d => d.projectId === currentProject.id)
 
   const activityIcons = {
     CheckCircle: { icon: CheckCircle2, color: 'var(--color-success)' },
@@ -338,44 +384,87 @@ export default function Dashboard() {
       {/* ─── 交付进度 ─────────────────────────────────────────── */}
       <div className="card" style={{ marginTop: 'var(--space-5)' }}>
         <div className="card-header">
-          <h4 className="card-title">进行中的交付</h4>
+          <h4 className="card-title">全链路状态板</h4>
           <button className="btn btn-ghost" style={{ fontSize: '12px' }} onClick={() => navigate('/pipeline')}>
-            查看全部 <ChevronRight size={12} aria-hidden="true" />
+            进入流水线 <ChevronRight size={12} aria-hidden="true" />
           </button>
         </div>
-        {projectDeliveries.length === 0 ? (
+        {deliveries.filter(d => !d.archived).length === 0 ? (
           <div style={{ padding: '24px', textAlign: 'center', color: 'var(--fg-tertiary)', fontSize: '13px' }}>
-            当前项目暂无交付中的需求，点击"新建需求"发起交付
+            暂无交付中的需求，点击“新建需求”发起交付
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-            {projectDeliveries.map(d => {
-              const stageName = stageNames[d.currentStageIndex] || '未知'
-              const progress = Math.round((d.currentStageIndex / 8) * 100)
+            {deliveries.filter(d => !d.archived).map(d => {
+              const stages = stagesFor(d)
+              const completed = isDeliveryCompleted(d)
+              const awaitingGate = isAwaitingGate(d)
+              const progress = completed ? 100 : Math.round((d.currentStageIndex / Math.max(stages.length - 1, 1)) * 100)
               const priorityColors = { P0: 'var(--color-error)', P1: 'var(--color-human-review)', P2: 'var(--color-progress)', P3: 'var(--fg-muted)' }
+              // 阶段链状态推导：未开始 / 执行中 / 待确认 / 已通过 / 已驳回
+              const stageChain = stages.map((s, idx) => {
+                const sd = stageDeliverables?.[d.id]?.[s.id]
+                let status = 'pending'
+                if (completed || idx < d.currentStageIndex || (sd && idx <= d.currentStageIndex)) {
+                  status = sd?.review && sd.review.passed === false ? 'rejected' : 'passed'
+                } else if (idx === d.currentStageIndex) {
+                  status = awaitingGate ? 'waiting' : 'running'
+                }
+                return {
+                  id: s.id,
+                  name: s.label || s.name || s.id,
+                  status,
+                  score: typeof sd?.review?.totalScore === 'number' ? sd.review.totalScore : null,
+                }
+              })
+              const chainStyles = {
+                pending: { background: 'var(--surface)', color: 'var(--fg-muted)', border: '1px solid var(--border)' },
+                running: { background: 'color-mix(in srgb, var(--color-progress) 12%, var(--bg))', color: 'var(--color-progress)', border: '1px solid var(--color-progress)' },
+                waiting: { background: 'color-mix(in srgb, var(--color-human-review) 14%, var(--bg))', color: 'var(--color-human-review)', border: '1px solid var(--color-human-review)' },
+                passed: { background: 'color-mix(in srgb, var(--color-success) 12%, var(--bg))', color: 'var(--color-success)', border: '1px solid var(--color-success)' },
+                rejected: { background: 'color-mix(in srgb, var(--color-error) 12%, var(--bg))', color: 'var(--color-error)', border: '1px solid var(--color-error)' },
+              }
+              const chainLabels = { pending: '未开始', running: '执行中', waiting: '待确认', passed: '已通过', rejected: '已驳回' }
               return (
-                <div
-                  key={d.id}
-                  className="delivery-card"
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => navigate('/pipeline')}
-                  onKeyDown={e => { if (e.key === 'Enter') navigate('/pipeline') }}
-                >
+                <div key={d.id} className="delivery-card" style={{ display: 'block' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
                       <span className="delivery-priority-tag" style={{ background: priorityColors[d.priority] || 'var(--fg-muted)' }}>{d.priority}</span>
-                      <span style={{ fontWeight: 510, fontSize: '14px' }}>{d.title}</span>
+                      <span style={{ fontWeight: 510, fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
                     </div>
-                    <span className="status-badge status-progress">
-                      <span className="status-dot"></span>
-                      {stageName}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {awaitingGate && (
+                        <button className="btn btn-primary" style={{ fontSize: '12px', padding: '4px 10px' }} onClick={() => navigate('/pipeline')}>
+                          去确认门禁
+                        </button>
+                      )}
+                      <span className={`status-badge ${completed ? 'status-done' : awaitingGate ? 'status-review' : 'status-progress'}`}>
+                        <span className="status-dot"></span>
+                        {completed ? '已完成' : awaitingGate ? '待人工确认' : (stages[d.currentStageIndex]?.label || stages[d.currentStageIndex]?.name || '进行中')}
+                      </span>
+                    </div>
+                  </div>
+                  {/* 阶段链 */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }} role="list" aria-label={`${d.title} 阶段链`}>
+                    {stageChain.map(s => (
+                      <span
+                        key={s.id}
+                        role="listitem"
+                        title={`${s.name}：${chainLabels[s.status]}${s.score !== null ? `（${s.score} 分）` : ''}`}
+                        style={{
+                          fontSize: '11px', padding: '2px 8px', borderRadius: '999px',
+                          ...chainStyles[s.status],
+                          fontWeight: s.status === 'waiting' ? 600 : 400,
+                        }}
+                      >
+                        {s.name}
+                      </span>
+                    ))}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <div style={{ flex: 1, height: '6px', background: 'var(--surface)', borderRadius: '3px', overflow: 'hidden' }}
                       role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label={`${d.title} 交付进度 ${progress}%`}>
-                      <div style={{ width: `${progress}%`, height: '100%', background: 'var(--color-progress)', borderRadius: '3px', transition: 'width 0.5s ease' }} />
+                      <div style={{ width: `${progress}%`, height: '100%', background: awaitingGate ? 'var(--color-human-review)' : 'var(--color-progress)', borderRadius: '3px', transition: 'width 0.5s ease' }} />
                     </div>
                     <span style={{ fontSize: '12px', color: 'var(--fg-tertiary)', fontWeight: 510, minWidth: '36px' }}>{progress}%</span>
                   </div>

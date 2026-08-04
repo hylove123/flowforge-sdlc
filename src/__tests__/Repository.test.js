@@ -1,13 +1,13 @@
 // ================================================================
 //  Repository.test.js
 //
-//  Covers the git integration added to repository.js:
-//    - cloneRepository (tauri): git_clone invoke, default appDataDir
+//  Covers the git integration added to repository.js (pure client,
+//  every service routes straight to tauri invoke):
+//    - cloneRepository: git_clone invoke, default appDataDir
 //      target, custom path precedence, progress relay, idempotent
 //      clone, failure → error field
-//    - cloneRepository (web): mock path untouched, no tauri calls
 //    - branch services: createBranch / checkoutBranch / listBranches
-//      / pushBranch / checkGitAvailable in both modes
+//      / pushBranch / checkGitAvailable
 //    - git credentials: per-host token lookup → auth param on
 //      git_clone / git_push (null when unconfigured)
 //    - buildFeatureBranchName slug rules
@@ -46,6 +46,7 @@ import {
 import {
   addGitCredential, findCredentialForUrl, buildGitAuthForUrl, normalizeGitHost,
 } from '@/services/gitCredentials'
+import { storage } from '@/adapters/StorageService'
 
 // ─── Helpers ────────────────────────────────────────────────────
 
@@ -62,24 +63,22 @@ function seedGitRepo(overrides = {}) {
 }
 
 beforeEach(() => {
-  localStorage.clear()
+  storage.remove('flowforge_repositories')
+  storage.remove('flowforge_git_credentials')
   invokeMock.mockReset()
   listenMock.mockClear()
   unlistenMock.mockClear()
   progressHandler = null
-  window.__FLOWFORGE_MODE__ = 'web'
 })
 
 afterEach(() => {
-  window.__FLOWFORGE_MODE__ = 'web'
   vi.useRealTimers()
 })
 
 // ─── cloneRepository (tauri) ────────────────────────────────────
 
-describe('cloneRepository — tauri mode', () => {
+describe('cloneRepository', () => {
   it('invokes git_clone with the default appDataDir target and marks the repo ready', async () => {
-    window.__FLOWFORGE_MODE__ = 'tauri'
     const repo = seedGitRepo()
     invokeMock.mockResolvedValue({
       repoPath: '/AppData/FlowForge/repos/p1/user-service',
@@ -105,7 +104,6 @@ describe('cloneRepository — tauri mode', () => {
   })
 
   it('prefers a custom local path on the repo record over the default target', async () => {
-    window.__FLOWFORGE_MODE__ = 'tauri'
     const repo = seedGitRepo({ path: '/Users/dev/custom-dir' })
     invokeMock.mockResolvedValue({ repoPath: '/Users/dev/custom-dir', alreadyCloned: false })
 
@@ -117,7 +115,6 @@ describe('cloneRepository — tauri mode', () => {
   })
 
   it('relays clone progress events for this repo only', async () => {
-    window.__FLOWFORGE_MODE__ = 'tauri'
     const repo = seedGitRepo()
     const events = []
     invokeMock.mockImplementation(() => {
@@ -137,7 +134,6 @@ describe('cloneRepository — tauri mode', () => {
   })
 
   it('is idempotent: alreadyCloned repos still resolve to ready', async () => {
-    window.__FLOWFORGE_MODE__ = 'tauri'
     const repo = seedGitRepo()
     invokeMock.mockResolvedValue({ repoPath: '/AppData/FlowForge/repos/p1/user-service', alreadyCloned: true })
 
@@ -147,7 +143,6 @@ describe('cloneRepository — tauri mode', () => {
   })
 
   it('writes the error field and rethrows when git_clone fails', async () => {
-    window.__FLOWFORGE_MODE__ = 'tauri'
     const repo = seedGitRepo()
     // Rust command errors surface as "{code}: {message}" strings
     invokeMock.mockRejectedValue('E_GIT_CLONE: authentication failed')
@@ -161,32 +156,9 @@ describe('cloneRepository — tauri mode', () => {
   })
 })
 
-// ─── cloneRepository (web mock unchanged) ───────────────────────
-
-describe('cloneRepository — web mode', () => {
-  it('keeps the mock behavior and never touches tauri', async () => {
-    window.__FLOWFORGE_MODE__ = 'web'
-    vi.useFakeTimers()
-    const repo = seedGitRepo()
-
-    const promise = cloneRepository(repo)
-    await vi.advanceTimersByTimeAsync(1500)
-    const updated = await promise
-
-    expect(updated.status).toBe('ready')
-    expect(updated.path).toBe('/workspace/projects/p1/user-service')
-    expect(invokeMock).not.toHaveBeenCalled()
-    expect(listenMock).not.toHaveBeenCalled()
-  })
-})
-
 // ─── Branch services ────────────────────────────────────────────
 
-describe('branch services — tauri mode', () => {
-  beforeEach(() => {
-    window.__FLOWFORGE_MODE__ = 'tauri'
-  })
-
+describe('branch services', () => {
   it('createBranch invokes git_create_branch with base', async () => {
     invokeMock.mockResolvedValue(true)
     await createBranch('/repo', 'feature/d1-login', 'main')
@@ -222,18 +194,6 @@ describe('branch services — tauri mode', () => {
     const probe = await checkGitAvailable()
     expect(invokeMock).toHaveBeenCalledWith('git_check_available')
     expect(probe.available).toBe(true)
-  })
-})
-
-describe('branch services — web mode', () => {
-  it('returns harmless mocks and never invokes tauri', async () => {
-    window.__FLOWFORGE_MODE__ = 'web'
-    expect(await createBranch('/repo', 'b')).toBe(true)
-    expect(await checkoutBranch('/repo', 'b')).toBe(true)
-    expect(await listBranches('/repo')).toEqual({ local: ['main'], remote: [], current: 'main' })
-    expect(await pushBranch('/repo', 'b')).toContain('mock')
-    expect(await checkGitAvailable()).toEqual({ available: false, version: null })
-    expect(invokeMock).not.toHaveBeenCalled()
   })
 })
 
@@ -273,7 +233,6 @@ describe('git credentials — token auth plumbing', () => {
   })
 
   it('cloneRepository passes the configured credential as auth', async () => {
-    window.__FLOWFORGE_MODE__ = 'tauri'
     addGitCredential({ host: 'example.com', username: 'bot', token: FAKE_TOKEN })
     const repo = seedGitRepo()
     invokeMock.mockResolvedValue({ repoPath: '/x', alreadyCloned: false })
@@ -287,7 +246,6 @@ describe('git credentials — token auth plumbing', () => {
   })
 
   it('pushBranch passes auth when the gitUrl host is configured, null otherwise', async () => {
-    window.__FLOWFORGE_MODE__ = 'tauri'
     addGitCredential({ host: 'example.com', token: FAKE_TOKEN })
     invokeMock.mockResolvedValue('pushed')
 
@@ -312,11 +270,7 @@ describe('git credentials — token auth plumbing', () => {
 
 // ─── Local directory reference (source: 'local') ────────────────
 
-describe('registerLocalRepository — tauri mode', () => {
-  beforeEach(() => {
-    window.__FLOWFORGE_MODE__ = 'tauri'
-  })
-
+describe('registerLocalRepository', () => {
   it('registers a git directory as-is: ready, source local, probed branch', async () => {
     invokeMock.mockResolvedValue({
       exists: true, isDirectory: true, isGitRepo: true,
@@ -363,20 +317,6 @@ describe('registerLocalRepository — tauri mode', () => {
     invokeMock.mockResolvedValue({ exists: true, isDirectory: false, isGitRepo: false })
     await expect(registerLocalRepository({ projectId: 'p1', name: 'x', path: '/etc/hosts' }))
       .rejects.toThrow('路径不是目录')
-  })
-})
-
-describe('registerLocalRepository — web mode', () => {
-  it('mocks the validation and never invokes tauri', async () => {
-    window.__FLOWFORGE_MODE__ = 'web'
-
-    const info = await validateLocalRepo('/any/dir')
-    expect(info).toMatchObject({ exists: true, isDirectory: true, isGitRepo: true })
-
-    const repo = await registerLocalRepository({ projectId: 'p1', name: 'x', path: '/any/dir' })
-    expect(repo.source).toBe('local')
-    expect(repo.status).toBe('ready')
-    expect(invokeMock).not.toHaveBeenCalled()
   })
 })
 

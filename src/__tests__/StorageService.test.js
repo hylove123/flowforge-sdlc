@@ -1,98 +1,107 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createStorageService, detectRuntimeMode, storage } from '@/adapters/StorageService'
 
-describe('StorageService', () => {
-  beforeEach(() => {
-    localStorage.clear()
-  })
+// Minimal mock of the tauri-plugin-sql database used by the adapter.
+function createMockDb(initialRows = {}) {
+  const table = new Map(Object.entries(initialRows))
+  return {
+    table,
+    async select(sql) {
+      if (/SELECT key, value FROM kv_store/.test(sql)) {
+        return Array.from(table, ([key, value]) => ({ key, value }))
+      }
+      throw new Error(`unexpected select: ${sql}`)
+    },
+    async execute(sql, params = []) {
+      if (/INSERT INTO kv_store/.test(sql)) table.set(params[0], params[1])
+      else if (/DELETE FROM kv_store/.test(sql)) table.delete(params[0])
+      else throw new Error(`unexpected execute: ${sql}`)
+    },
+  }
+}
 
+describe('StorageService (pure client)', () => {
   afterEach(() => {
-    localStorage.clear()
-    window.__FLOWFORGE_MODE__ = 'web'
-    delete window.__TAURI_INTERNALS__
+    delete window.__FLOWFORGE_MODE__
+    vi.restoreAllMocks()
   })
 
   describe('mode detection', () => {
-    it('honors window.__FLOWFORGE_MODE__ override first', () => {
-      window.__FLOWFORGE_MODE__ = 'web'
-      window.__TAURI_INTERNALS__ = { invoke: () => {} }
-      expect(detectRuntimeMode()).toBe('web')
-
-      window.__FLOWFORGE_MODE__ = 'tauri'
-      expect(detectRuntimeMode()).toBe('tauri')
-    })
-
-    it('falls back to __TAURI_INTERNALS__ probe, then web', () => {
+    it('always reports tauri on the desktop platform', () => {
       delete window.__FLOWFORGE_MODE__
-      expect(detectRuntimeMode()).toBe('web')
-
-      window.__TAURI_INTERNALS__ = { invoke: () => {} }
       expect(detectRuntimeMode()).toBe('tauri')
     })
 
-    it('factory returns implementation matching mode', () => {
-      expect(createStorageService('web').mode).toBe('web')
-      expect(createStorageService('tauri').mode).toBe('tauri')
-      // setup.js forces web mode, so singleton must be web
-      expect(storage.mode).toBe('web')
+    it('keeps the __FLOWFORGE_MODE__ override for debugging', () => {
+      window.__FLOWFORGE_MODE__ = 'web'
+      expect(detectRuntimeMode()).toBe('web')
+    })
+
+    it('factory always returns the SQLite-backed implementation', () => {
+      // Even a "web" argument yields the single tauri implementation
+      expect(createStorageService('web', { loadDb: async () => createMockDb() }).mode).toBe('tauri')
+      expect(createStorageService('tauri', { loadDb: async () => createMockDb() }).mode).toBe('tauri')
+      expect(storage.mode).toBe('tauri')
     })
   })
 
-  describe('web mode get/set/remove', () => {
-    const svc = createStorageService('web')
+  describe('get/set/remove (SQLite-backed)', () => {
+    it('set then get returns the raw string; missing key yields null', async () => {
+      const svc = createStorageService('tauri', { loadDb: async () => createMockDb() })
+      await svc.ready()
 
-    it('set then get returns the raw string', () => {
-      svc.set('ff_test_key', 'hello')
-      expect(svc.get('ff_test_key')).toBe('hello')
-      expect(localStorage.getItem('ff_test_key')).toBe('hello')
+      svc.set('flowforge_k', 'hello')
+      expect(svc.get('flowforge_k')).toBe('hello')
+      expect(svc.get('flowforge_missing')).toBeNull()
     })
 
-    it('get returns null for missing key', () => {
-      expect(svc.get('ff_missing')).toBeNull()
+    it('remove deletes the key', async () => {
+      const svc = createStorageService('tauri', { loadDb: async () => createMockDb({ flowforge_k: 'x' }) })
+      await svc.ready()
+
+      expect(svc.get('flowforge_k')).toBe('x')
+      svc.remove('flowforge_k')
+      expect(svc.get('flowforge_k')).toBeNull()
     })
 
-    it('remove deletes the key', () => {
-      svc.set('ff_test_key', 'x')
-      svc.remove('ff_test_key')
-      expect(svc.get('ff_test_key')).toBeNull()
-    })
+    it('getJSON/setJSON round-trip and fallback on bad data', async () => {
+      const svc = createStorageService('tauri', { loadDb: async () => createMockDb() })
+      await svc.ready()
 
-    it('getJSON/setJSON round-trip and fallback on bad data', () => {
-      svc.setJSON('ff_json', { a: 1, list: [1, 2] })
-      expect(svc.getJSON('ff_json')).toEqual({ a: 1, list: [1, 2] })
+      svc.setJSON('flowforge_json', { a: 1, list: [1, 2] })
+      expect(svc.getJSON('flowforge_json')).toEqual({ a: 1, list: [1, 2] })
+      expect(svc.getJSON('flowforge_absent', [])).toEqual([])
 
-      expect(svc.getJSON('ff_absent', [])).toEqual([])
-
-      localStorage.setItem('ff_broken', '{not json')
-      expect(svc.getJSON('ff_broken', { fallback: true })).toEqual({ fallback: true })
+      svc.set('flowforge_broken', '{not json')
+      expect(svc.getJSON('flowforge_broken', { fallback: true })).toEqual({ fallback: true })
     })
   })
 
-  describe('tauri mode fallback', () => {
-    it('degrades to localStorage when SQLite init fails (Phase 2a guarantee)', async () => {
+  describe('in-memory fallback', () => {
+    it('degrades to the in-memory cache when SQLite init fails; browser storage is never used', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const svc = createStorageService('tauri', {
         loadDb: async () => { throw new Error('sqlite unavailable') },
       })
       // optimistic write before ready must survive the fallback switch
-      svc.set('ff_tauri_key', 'v')
+      svc.set('flowforge_key', 'v')
       await svc.ready()
 
       expect(svc.isReady).toBe(true)
       expect(warn).toHaveBeenCalled()
-      expect(localStorage.getItem('ff_tauri_key')).toBe('v')
-      expect(svc.get('ff_tauri_key')).toBe('v')
+      expect(svc.get('flowforge_key')).toBe('v')
+      expect(localStorage.getItem('flowforge_key')).toBeNull()
 
-      // post-fallback writes go straight to localStorage
-      svc.set('ff_after', 'w')
-      expect(localStorage.getItem('ff_after')).toBe('w')
+      // post-fallback writes keep working from the cache
+      svc.set('flowforge_after', 'w')
+      expect(svc.get('flowforge_after')).toBe('w')
       warn.mockRestore()
     })
 
-    it('web mode is ready synchronously', () => {
-      const svc = createStorageService('web')
+    it('ready() resolves once init settles', async () => {
+      const svc = createStorageService('tauri', { loadDb: async () => createMockDb() })
+      await svc.ready()
       expect(svc.isReady).toBe(true)
-      return expect(svc.ready()).resolves.toBeUndefined()
     })
   })
 })

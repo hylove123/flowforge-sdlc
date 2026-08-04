@@ -28,6 +28,11 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{oneshot, Mutex};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Graph indexing (graph_engine.index_repo / index_cross_repo) can run
+/// for many minutes on large repos; the generic 30s budget would kill
+/// the request while the sidecar keeps working — give these a wider
+/// window matching the sidecar's own 10-minute call timeout.
+const LONG_REQUEST_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_HEARTBEAT_MISSES: u32 = 3;
@@ -89,8 +94,12 @@ impl Default for SidecarManager {
 // ─── Command resolution ─────────────────────────────────────────
 
 /// Locate the Node executable: FLOWFORGE_NODE override first, then a
-/// PATH scan for `node` (`node.exe` on Windows). tokio's Command does
-/// not use the shell, so the explicit lookup keeps Windows working.
+/// PATH scan for `node` (`node.exe` on Windows), then well-known
+/// install locations. tokio's Command does not use the shell, so the
+/// explicit lookup keeps Windows working. The fallback probing matters
+/// for macOS GUI apps: launchd hands the app a minimal PATH
+/// (/usr/bin:/bin:/usr/sbin:/sbin), so nvm/Homebrew installs are
+/// invisible without it.
 fn resolve_node() -> Result<String, String> {
     if let Ok(node) = std::env::var("FLOWFORGE_NODE") {
         if !node.trim().is_empty() {
@@ -106,8 +115,55 @@ fn resolve_node() -> Result<String, String> {
             }
         }
     }
+    // Fallback probes: nvm (pick the newest installed version),
+    // Homebrew (Apple Silicon + Intel), MacPorts, system install.
+    #[cfg(unix)]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            let nvm_root = std::path::Path::new(&home)
+                .join(".nvm")
+                .join("versions")
+                .join("node");
+            if let Ok(entries) = std::fs::read_dir(&nvm_root) {
+                let mut versions: Vec<std::path::PathBuf> = entries
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.join("bin").join("node").is_file())
+                    .collect();
+                // "v24.13.1" style names sort correctly as text for
+                // typical single/double-digit majors; sort then take last.
+                versions.sort();
+                if let Some(newest) = versions.pop() {
+                    let node = newest.join("bin").join("node");
+                    log::info!("[sidecar] node resolved via nvm: {}", node.display());
+                    return Ok(node.to_string_lossy().into_owned());
+                }
+            }
+        }
+        for candidate in [
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node",
+            "/opt/local/bin/node",
+            "/usr/bin/node",
+        ] {
+            if std::path::Path::new(candidate).is_file() {
+                return Ok(candidate.to_string());
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        for candidate in [
+            r"C:\Program Files\nodejs\node.exe",
+            r"C:\Program Files (x86)\nodejs\node.exe",
+        ] {
+            if std::path::Path::new(candidate).is_file() {
+                return Ok(candidate.to_string());
+            }
+        }
+    }
     Err(format!(
-        "`{exe}` not found on PATH — install Node.js >= 20 or set FLOWFORGE_NODE to the executable path"
+        "`{exe}` not found on PATH or common install locations — install Node.js >= 20 or set FLOWFORGE_NODE to the executable path"
     ))
 }
 
@@ -140,7 +196,10 @@ fn split_command_line(cmd: &str) -> Vec<String> {
 /// Priority: FLOWFORGE_SIDECAR_CMD (quote-aware whitespace-split;
 /// wrap paths containing spaces in double quotes) always wins.
 /// Packaged (release) builds load `sidecar/dist/index.js` from the
-/// Tauri resource dir; dev (debug) builds keep the repo-relative
+/// Tauri resource dir and run it with the bundled Node binary
+/// (`bin/node` resource, fetched by scripts/fetch-node.mjs) so the
+/// app needs no system Node; falls back to system lookup when the
+/// bundled runtime is absent. Dev (debug) builds keep the repo-relative
 /// defaults: built output first, then tsx on the TS source.
 fn resolve_command<R: Runtime>(app: &AppHandle<R>) -> Result<(String, Vec<String>), String> {
     if let Ok(cmd) = std::env::var("FLOWFORGE_SIDECAR_CMD") {
@@ -161,7 +220,18 @@ fn resolve_command<R: Runtime>(app: &AppHandle<R>) -> Result<(String, Vec<String
             .join("dist")
             .join("index.js");
         if resource.exists() {
-            return Ok((resolve_node()?, vec![resource.to_string_lossy().into_owned()]));
+            // Prefer the bundled Node runtime (zero external deps);
+            // fall back to system node when it was not packaged.
+            let bundled = app
+                .path()
+                .resource_dir()
+                .ok()
+                .map(|d| d.join("bin").join(if cfg!(windows) { "node.exe" } else { "node" }));
+            let node = match bundled.filter(|p| p.is_file()) {
+                Some(p) => p.to_string_lossy().into_owned(),
+                None => resolve_node()?,
+            };
+            return Ok((node, vec![resource.to_string_lossy().into_owned()]));
         }
         return Err(format!(
             "packaged sidecar not found at `{}` — the bundle is missing its sidecar/dist resource; reinstall the app or set FLOWFORGE_SIDECAR_CMD",
@@ -458,8 +528,14 @@ pub async fn sidecar_request(
     params: Value,
     manager: State<'_, Arc<SidecarManager>>,
 ) -> Result<Value, String> {
+    // long-running graph indexing gets the extended budget
+    let timeout = if method.starts_with("graph_engine.index") {
+        LONG_REQUEST_TIMEOUT
+    } else {
+        REQUEST_TIMEOUT
+    };
     manager
-        .request_with_timeout(id, &method, params, REQUEST_TIMEOUT)
+        .request_with_timeout(id, &method, params, timeout)
         .await
 }
 

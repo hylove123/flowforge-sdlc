@@ -4,17 +4,21 @@ import {
   Settings, Users, Bell, Code2, Shield,
   FileText, Plug, Plus, ChevronRight, Save,
   Monitor, ExternalLink, Cloud, Check, X, Key, Zap,
-  CheckCircle, AlertCircle, Eye, EyeOff, Server, Download, Upload, Database, GitBranch
+  CheckCircle, AlertCircle, Eye, EyeOff, Server, Download, Upload, Database, GitBranch,
+  Copy, Loader2, Info, RefreshCw,
 } from 'lucide-react'
 import { useApp, EMPTY_WORKSPACE_PROJECT_ID } from '@/context/AppContext'
+import { useSidecar } from '@/context/SidecarContext'
 import { Toggle } from '@/components/ui/Toggle'
 import ConfigScopeBanner from '@/components/ConfigScopeBanner'
 import { hasAPIKey, getActiveModel, getCustomModels } from '@/services/ai'
+import { parseMcpServersJson, exportMcpServersJson, toMcpServerConfig } from '@/services/mcpConfig'
 import {
   getGitCredentials, addGitCredential, updateGitCredential, deleteGitCredential,
   DEFAULT_GIT_USERNAME,
 } from '@/services/gitCredentials'
 import { exportAllData, importAllData } from '@/services/dataTransfer'
+import { checkForUpdate, downloadAndInstall, describeUpdateError } from '@/services/appUpdater'
 
 const notificationDefs = [
   { key: 'stageComplete', label: '阶段完成通知', desc: '每个阶段AI生成完成后发送通知' },
@@ -64,10 +68,115 @@ export default function SettingsPage() {
   const [showCreateRule, setShowCreateRule] = useState(false)
   const [showConfigMCP, setShowConfigMCP] = useState(false)
 
+  // ── 关于与自动更新（tauri-plugin-updater） ──
+  const isTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__
+  const [appVersion, setAppVersion] = useState('')
+  const [updateState, setUpdateState] = useState('idle') // idle|checking|available|latest|downloading|error
+  const [updateInfo, setUpdateInfo] = useState(null)
+  const [updateError, setUpdateError] = useState('')
+  const [updateProgress, setUpdateProgress] = useState(0)
+
+  useEffect(() => {
+    if (!isTauri) return
+    import('@tauri-apps/api/app').then(({ getVersion }) => getVersion().then(setAppVersion)).catch(() => {})
+  }, [isTauri])
+
+  const handleCheckUpdate = async () => {
+    setUpdateState('checking')
+    setUpdateError('')
+    try {
+      const upd = await checkForUpdate()
+      if (upd) {
+        setUpdateInfo(upd)
+        setUpdateState('available')
+      } else {
+        setUpdateState('latest')
+      }
+    } catch (e) {
+      setUpdateError(describeUpdateError(e))
+      setUpdateState('error')
+    }
+  }
+
+  const handleInstallUpdate = async () => {
+    setUpdateState('downloading')
+    setUpdateProgress(0)
+    try {
+      await downloadAndInstall(({ percent }) => setUpdateProgress(percent))
+      // relaunch 后不会走到这里
+    } catch (e) {
+      setUpdateError(describeUpdateError(e))
+      setUpdateState('error')
+    }
+  }
+
   const [inviteForm, setInviteForm] = useState({ name: '', role: '产品经理', email: '' })
   const [skillForm, setSkillForm] = useState({ name: '', desc: '', stage: '需求分析' })
   const [ruleForm, setRuleForm] = useState({ name: '', desc: '', stage: '需求分析' })
   const [mcpForm, setMcpForm] = useState({ name: '', desc: '' })
+
+  // ── MCP JSON 模式（标准 mcpServers 格式粘贴/导出） ──
+  const sidecar = useSidecar()
+  const [showJsonMcp, setShowJsonMcp] = useState(false)
+  const [jsonText, setJsonText] = useState('')
+  const [jsonResult, setJsonResult] = useState(null)
+  const [testingMcpName, setTestingMcpName] = useState(null)
+
+  const openJsonMcp = () => {
+    setJsonText(exportMcpServersJson(mcpTools))
+    setJsonResult(null)
+    setShowJsonMcp(true)
+  }
+
+  const handleParseJson = () => {
+    setJsonResult(parseMcpServersJson(jsonText))
+  }
+
+  const handleImportJson = () => {
+    const res = parseMcpServersJson(jsonText)
+    setJsonResult(res)
+    if (res.errors.length > 0 || res.entries.length === 0) return
+    const merged = [...mcpTools]
+    for (const entry of res.entries) {
+      const idx = merged.findIndex(t => t.name === entry.name)
+      if (idx >= 0) merged[idx] = { ...entry, enabled: merged[idx].enabled !== false }
+      else merged.push(entry)
+    }
+    updateProjectConfig(currentProject.id, 'mcpTools', merged)
+    showToast(`已导入 ${res.entries.length} 个 MCP 服务配置`, 'success')
+    setShowJsonMcp(false)
+  }
+
+  const handleTestJsonMcp = async (entry) => {
+    const cfg = toMcpServerConfig(entry)
+    if (!cfg) return
+    if (sidecar.mode !== 'tauri' || !sidecar.isReady) {
+      showToast('测试连接需要 sidecar 就绪', 'info')
+      return
+    }
+    setTestingMcpName(entry.name)
+    try {
+      const res = await sidecar.invoke('tools.connect_test', { server: cfg })
+      if (res?.ok) {
+        showToast(`「${cfg.name}」连接成功，发现 ${res.tools?.length ?? 0} 个工具`, 'success')
+      } else {
+        showToast(`「${cfg.name}」连接失败：${res?.error || '未知错误'}`, 'error')
+      }
+    } catch (e) {
+      showToast(`连接测试失败：${e?.message || e}`, 'error')
+    } finally {
+      setTestingMcpName(null)
+    }
+  }
+
+  const handleCopyJson = async () => {
+    try {
+      await navigator.clipboard.writeText(jsonText || exportMcpServersJson(mcpTools))
+      showToast('JSON 已复制到剪贴板', 'success')
+    } catch {
+      showToast('复制失败，请手动选中文本复制', 'error')
+    }
+  }
 
   const stageOptions = ['需求分析', 'BRD生成', 'PRD生成', '测试用例', '开发方案', '开发', 'Code Review', '自动化测试', '交付']
   const roleOptions = ['产品经理', '开发工程师', '测试工程师', '架构师', '解决方案']
@@ -185,6 +294,7 @@ export default function SettingsPage() {
           { key: 'gitcreds', label: 'Git 凭证', icon: GitBranch },
           { key: 'notifications', label: '通知设置', icon: Bell },
           { key: 'devenv', label: '开发环境', icon: Monitor },
+          { key: 'about', label: '关于与更新', icon: Info },
         ].map(tab => (
           <div key={tab.key}
             className={`tab-item ${activeTab === tab.key ? 'active' : ''}`}
@@ -454,7 +564,10 @@ export default function SettingsPage() {
       {activeTab === 'mcp' && (
         <div>
           <ConfigScopeBanner />
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '12px', marginTop: '12px' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginBottom: '12px', marginTop: '12px' }}>
+            <button className="btn btn-secondary" style={{ fontSize: '12px' }} onClick={() => { if (guardProjectWrite()) openJsonMcp() }}>
+              <Code2 size={12} /> JSON 模式
+            </button>
             <button className="btn btn-primary" style={{ fontSize: '12px' }} onClick={() => { if (guardProjectWrite()) setShowConfigMCP(true) }}>
               <Plus size={12} /> 配置MCP
             </button>
@@ -473,9 +586,15 @@ export default function SettingsPage() {
                         color: tool.enabled ? 'var(--color-success)' : 'var(--fg-muted)'
                       }} />
                     </div>
-                    <div>
+                    <div style={{ minWidth: 0 }}>
                       <div style={{ fontWeight: 510, fontSize: '14px' }}>{tool.name}</div>
-                      <div style={{ fontSize: '12px', color: 'var(--fg-tertiary)' }}>{tool.desc}</div>
+                      <div style={{ fontSize: '12px', color: 'var(--fg-tertiary)' }}>{tool.desc || tool.description}</div>
+                      {tool.url && (
+                        <code style={{
+                          fontSize: '11px', color: 'var(--fg-muted)', display: 'block',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px'
+                        }}>{tool.url}</code>
+                      )}
                     </div>
                   </div>
                   <Toggle
@@ -738,6 +857,73 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {activeTab === 'about' && (
+        <div>
+          {/* 应用信息 */}
+          <div className="card" style={{ maxWidth: '720px', marginBottom: '20px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+              <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'color-mix(in srgb, var(--accent) 12%, var(--bg))', color: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Info size={16} />
+              </div>
+              <div>
+                <h4 style={{ margin: 0 }}>FlowForge SDLC</h4>
+                <p style={{ fontSize: '12px', color: 'var(--fg-tertiary)', margin: '2px 0 0' }}>
+                  团队 AI 交付流程编排平台 · 纯客户端桌面应用{appVersion ? ` · v${appVersion}` : ''}
+                </p>
+              </div>
+            </div>
+
+            {/* 自动更新 */}
+            <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: '240px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 510 }}>自动更新</div>
+                  <div style={{ fontSize: '12px', color: 'var(--fg-tertiary)', marginTop: '2px' }}>
+                    {updateState === 'idle' && '检查是否有新版本；更新包经签名校验后自动安装并重启'}
+                    {updateState === 'checking' && '正在检查更新…'}
+                    {updateState === 'latest' && `当前已是最新版本${appVersion ? `（v${appVersion}）` : ''}`}
+                    {updateState === 'available' && `发现新版本 v${updateInfo?.version}`}
+                    {updateState === 'downloading' && `正在下载更新… ${updateProgress}%`}
+                    {updateState === 'error' && updateError}
+                  </div>
+                  {updateState === 'available' && updateInfo?.body && (
+                    <pre style={{ fontSize: '12px', color: 'var(--fg-secondary)', background: 'var(--surface)', padding: '10px 12px', borderRadius: '8px', marginTop: '8px', whiteSpace: 'pre-wrap', fontFamily: 'inherit', maxHeight: '140px', overflowY: 'auto' }}>
+                      {updateInfo.body}
+                    </pre>
+                  )}
+                  {updateState === 'downloading' && (
+                    <div style={{ marginTop: '10px', height: '6px', borderRadius: '3px', background: 'var(--surface)', overflow: 'hidden' }}>
+                      <div style={{ width: `${updateProgress}%`, height: '100%', background: 'var(--accent)', transition: 'width 0.2s' }} />
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {updateState === 'available' ? (
+                    <button className="btn btn-primary" onClick={handleInstallUpdate}>
+                      <Download size={14} /> 安装并重启
+                    </button>
+                  ) : (
+                    <button
+                      className="btn"
+                      onClick={handleCheckUpdate}
+                      disabled={!isTauri || updateState === 'checking' || updateState === 'downloading'}
+                    >
+                      {updateState === 'checking' ? <Loader2 size={14} className="ff-spin" /> : <RefreshCw size={14} />}
+                      检查更新
+                    </button>
+                  )}
+                </div>
+              </div>
+              {!isTauri && (
+                <div style={{ fontSize: '11px', color: 'var(--fg-muted)', marginTop: '10px' }}>
+                  自动更新仅在桌面客户端（Tauri）中可用
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Invite Member Dialog */}
       {showInviteMember && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}
@@ -887,6 +1073,93 @@ export default function SettingsPage() {
                 onClick={() => { if (mcpForm.name.trim()) { const newMcpTools = [...(currentProject.mcpTools || []), { name: mcpForm.name, desc: mcpForm.desc, enabled: true }]; updateProjectConfig(currentProject.id, 'mcpTools', newMcpTools); showToast('MCP工具「' + mcpForm.name + '」已配置', 'success'); setMcpForm({ name: '', desc: '' }); setShowConfigMCP(false) } }}>
                 配置
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MCP JSON 模式弹窗 */}
+      {showJsonMcp && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}
+          onClick={() => setShowJsonMcp(false)} role="presentation">
+          <div style={{ background: 'var(--bg)', borderRadius: '12px', padding: '24px', width: '640px', maxWidth: '92vw', maxHeight: '88vh', overflowY: 'auto', border: '1px solid var(--border)', boxShadow: '0 8px 32px rgba(0,0,0,0.12)' }}
+            onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="json-mcp-title">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <h4 id="json-mcp-title" style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>MCP JSON 配置</h4>
+              <div role="button" tabIndex={0} onClick={() => setShowJsonMcp(false)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowJsonMcp(false) } }}
+                style={{ cursor: 'pointer', padding: '4px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--fg-muted)' }}>
+                <X size={16} />
+              </div>
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--fg-tertiary)', marginBottom: '10px', lineHeight: 1.6 }}>
+              粘贴标准 mcpServers 格式：{`{ "mcpServers": { "名称": { "command": "npx", "args": [...], "env": {...} } 或 { "url": "http(s)://..." } } }`}。
+              当前已有配置已导出在下方，可直接编辑后导入。
+            </div>
+            <textarea
+              className="input"
+              value={jsonText}
+              onChange={e => setJsonText(e.target.value)}
+              spellCheck={false}
+              style={{ width: '100%', minHeight: '220px', resize: 'vertical', fontFamily: 'JetBrains Mono, monospace', fontSize: '12px', lineHeight: 1.6 }}
+              placeholder='{"mcpServers": {"my-server": {"command": "npx", "args": ["-y", "my-mcp-server"]}}}'
+            />
+
+            {jsonResult?.errors?.length > 0 && (
+              <div style={{
+                marginTop: '10px', padding: '10px 12px', borderRadius: '8px',
+                background: 'color-mix(in srgb, var(--color-error) 8%, var(--bg))',
+                border: '1px solid color-mix(in srgb, var(--color-error) 25%, transparent)'
+              }}>
+                {jsonResult.errors.map((err, i) => (
+                  <div key={i} style={{ fontSize: '12px', color: 'var(--color-error)', lineHeight: 1.8, display: 'flex', gap: '6px' }}>
+                    <AlertCircle size={13} style={{ marginTop: '3px', flexShrink: 0 }} />
+                    <span>第 {err.line} 行：{err.message}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {jsonResult && jsonResult.errors.length === 0 && jsonResult.entries.length > 0 && (
+              <div style={{ marginTop: '10px' }}>
+                <div style={{ fontSize: '12px', color: 'var(--fg-tertiary)', marginBottom: '6px' }}>
+                  解析成功，共 {jsonResult.entries.length} 个服务：
+                </div>
+                {jsonResult.entries.map(entry => (
+                  <div key={entry.name} style={{
+                    display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px',
+                    border: '1px solid var(--border)', borderRadius: '8px', marginBottom: '6px'
+                  }}>
+                    <Plug size={14} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+                    <span style={{ fontSize: '13px', fontWeight: 510 }}>{entry.name}</span>
+                    <span style={{
+                      fontSize: '10px', padding: '1px 8px', borderRadius: '9999px', fontWeight: 510,
+                      background: 'color-mix(in srgb, var(--accent) 10%, transparent)', color: 'var(--accent)'
+                    }}>{entry.type === 'http' ? 'HTTP/SSE' : 'stdio'}</span>
+                    <code style={{
+                      fontSize: '11px', color: 'var(--fg-muted)', flex: 1,
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+                    }}>{entry.url}</code>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ fontSize: '11px', flexShrink: 0 }}
+                      onClick={() => handleTestJsonMcp(entry)}
+                      disabled={testingMcpName !== null}
+                    >
+                      {testingMcpName === entry.name ? <Loader2 size={12} className="ff-spin" /> : <Zap size={12} />}
+                      {testingMcpName === entry.name ? '测试中' : '测试连接'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' }}>
+              <button className="btn btn-ghost" onClick={handleCopyJson}>
+                <Copy size={13} /> 复制 JSON
+              </button>
+              <button className="btn btn-secondary" onClick={handleParseJson}>解析校验</button>
+              <button className="btn btn-secondary" onClick={() => setShowJsonMcp(false)}>取消</button>
+              <button className="btn btn-primary" onClick={() => { if (guardProjectWrite()) handleImportJson() }}>解析并导入</button>
             </div>
           </div>
         </div>

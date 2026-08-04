@@ -3,11 +3,10 @@
 //
 //  Covers the tauri-mode CodeModule rollup added to codebaseIndex.js:
 //    - aggregateTopModules: Java package / top-dir aggregation, top-N cap
-//    - registerCodeModuleEntities: graph registration + IMPLEMENTS link
-//      + idempotency on re-index
+//    - registerCodeModuleEntities: delegates module registration to the
+//      sidecar knowledge layer (knowledge.register_code_modules)
 //    - startIndexing (tauri): full pipeline with mocked tauri invoke /
 //      plugin-sql, progress callback phases
-//    - startIndexing (web): mock path untouched, no graph writes
 // ================================================================
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -24,7 +23,14 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: (...args) => listenMock(...args),
 }))
 
-const sidecarInvokeMock = vi.fn(() => Promise.resolve({ registered: 0, edges: 0 }))
+// sidecar knowledge layer: registration is an upsert by label on the
+// sidecar side, so the mock just echoes the module count back
+const sidecarInvokeMock = vi.fn((method, params) => {
+  if (method === 'knowledge.register_code_modules') {
+    return Promise.resolve({ registered: params?.modules?.length ?? 0, edges: 0 })
+  }
+  return Promise.resolve({ registered: 0, edges: 0 })
+})
 vi.mock('@/adapters/SidecarBridge', () => ({
   sidecar: { invoke: (...args) => sidecarInvokeMock(...args) },
 }))
@@ -47,22 +53,19 @@ import {
   aggregateTopModules,
   registerCodeModuleEntities,
   startIndexing,
-  getIndex,
 } from '@/services/codebaseIndex'
-import { getKnowledgeGraph } from '@/services/graph'
 
 // ─── Helpers ────────────────────────────────────────────────────
 
 const PROJECT = 'proj-1'
 const REPO = 'repo-1'
 
-function codeModulesOf(projectId = PROJECT) {
-  return getKnowledgeGraph().getEntities({ concept: 'CodeModule', projectId })
+function registerCodeModulesCalls() {
+  return sidecarInvokeMock.mock.calls.filter(([m]) => m === 'knowledge.register_code_modules')
 }
 
 beforeEach(() => {
   localStorage.clear()
-  getKnowledgeGraph().clearAll()
   invokeMock.mockReset()
   sidecarInvokeMock.mockClear()
   dbSelectMock.mockReset()
@@ -70,7 +73,6 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  window.__FLOWFORGE_MODE__ = 'web'
   vi.useRealTimers()
 })
 
@@ -141,64 +143,40 @@ describe('registerCodeModuleEntities', () => {
     { name: 'src', kind: 'directory', fileCount: 2, languages: ['javascript'], sampleFiles: ['src/a.js'] },
   ]
 
-  it('registers CodeModule entities scoped to the project', () => {
-    const result = registerCodeModuleEntities({ projectId: PROJECT, repoId: REPO, repoName: 'demo-repo', modules })
+  it('maps modules and delegates to sidecar knowledge.register_code_modules', async () => {
+    const result = await registerCodeModuleEntities({ projectId: PROJECT, repoId: REPO, repoName: 'demo-repo', modules })
     expect(result.registered).toBe(2)
 
-    const entities = codeModulesOf()
-    expect(entities).toHaveLength(2)
-    const order = entities.find(e => e.properties.moduleName === 'com.acme.order')
-    expect(order.label).toBe('demo-repo/com.acme.order')
-    expect(order.stage).toBe('dev')
-    expect(order.projectId).toBe(PROJECT)
-    expect(order.properties).toMatchObject({
-      source: 'code-index',
-      repoId: REPO,
-      repoName: 'demo-repo',
-      kind: 'package',
-      fileCount: 3,
-      languages: ['java'],
+    expect(sidecarInvokeMock).toHaveBeenCalledWith('knowledge.register_code_modules', {
+      projectId: PROJECT,
+      stageId: 'dev',
+      modules: [
+        { file: 'demo-repo/com.acme.order', lang: 'java', symbolCount: 3, topSymbols: ['a.java'] },
+        { file: 'demo-repo/src', lang: 'javascript', symbolCount: 2, topSymbols: ['src/a.js'] },
+      ],
     })
-    expect(order.properties.content).toContain('com.acme.order')
   })
 
-  it('links modules IMPLEMENTS → latest dev-plan Deliverable when present', () => {
-    const graph = getKnowledgeGraph()
-    const plan = graph.addEntity({
-      concept: 'Deliverable', projectId: PROJECT, label: '技术方案', stage: 'dev-plan',
-      properties: { content: 'plan' },
+  it('skips modules without a name', async () => {
+    const result = await registerCodeModuleEntities({
+      projectId: PROJECT, repoId: REPO, repoName: 'demo-repo',
+      modules: [{ kind: 'directory' }, ...modules],
     })
-    const result = registerCodeModuleEntities({ projectId: PROJECT, repoId: REPO, repoName: 'demo-repo', modules })
-    expect(result.edges).toBe(2)
-    const edges = graph.getEdges({ relation: 'IMPLEMENTS', targetId: plan.id })
-    expect(edges).toHaveLength(2)
-    // inverse edges created by the graph engine
-    expect(graph.getEdges({ relation: 'IMPLEMENTED_BY', sourceId: plan.id })).toHaveLength(2)
+    expect(result.registered).toBe(2)
+    const [, params] = registerCodeModulesCalls().at(-1)
+    expect(params.modules.map(m => m.file)).toEqual(['demo-repo/com.acme.order', 'demo-repo/src'])
   })
 
-  it('is idempotent across repeated indexing of the same repo', () => {
-    registerCodeModuleEntities({ projectId: PROJECT, repoId: REPO, repoName: 'demo-repo', modules })
-    registerCodeModuleEntities({ projectId: PROJECT, repoId: REPO, repoName: 'demo-repo', modules })
-    registerCodeModuleEntities({ projectId: PROJECT, repoId: REPO, repoName: 'demo-repo', modules })
-    expect(codeModulesOf()).toHaveLength(2)
+  it('tolerates the sidecar returning nothing', async () => {
+    sidecarInvokeMock.mockResolvedValueOnce(null)
+    const result = await registerCodeModuleEntities({ projectId: PROJECT, repoId: REPO, repoName: 'demo-repo', modules })
+    expect(result).toEqual({ registered: 0, edges: 0 })
   })
 
-  it('does not clobber other repos or manually created CodeModules', () => {
-    const graph = getKnowledgeGraph()
-    const manual = graph.addEntity({
-      concept: 'CodeModule', projectId: PROJECT, label: '手工模块', stage: 'dev', properties: {},
-    })
-    registerCodeModuleEntities({
-      projectId: PROJECT, repoId: 'repo-2', repoName: 'other',
-      modules: [{ name: 'lib', kind: 'directory', fileCount: 1, languages: [], sampleFiles: [] }],
-    })
-    registerCodeModuleEntities({ projectId: PROJECT, repoId: REPO, repoName: 'demo-repo', modules })
-    registerCodeModuleEntities({ projectId: PROJECT, repoId: REPO, repoName: 'demo-repo', modules })
-
-    const entities = codeModulesOf()
-    expect(entities.find(e => e.id === manual.id)).toBeTruthy()
-    expect(entities.filter(e => e.properties.repoId === 'repo-2')).toHaveLength(1)
-    expect(entities.filter(e => e.properties.repoId === REPO)).toHaveLength(2)
+  it('re-indexing calls the sidecar upsert again (idempotency lives in the sidecar)', async () => {
+    await registerCodeModuleEntities({ projectId: PROJECT, repoId: REPO, repoName: 'demo-repo', modules })
+    await registerCodeModuleEntities({ projectId: PROJECT, repoId: REPO, repoName: 'demo-repo', modules })
+    expect(registerCodeModulesCalls()).toHaveLength(2)
   })
 })
 
@@ -224,7 +202,6 @@ describe('startIndexing — tauri mode', () => {
   }
 
   it('indexes, registers aggregated CodeModules and reports progress', async () => {
-    window.__FLOWFORGE_MODE__ = 'tauri'
     mockTauriIndex()
 
     const phases = []
@@ -235,58 +212,34 @@ describe('startIndexing — tauri mode', () => {
     expect(updated.modulesRegistered).toBe(2)
     expect(phases).toEqual(['indexing', 'registering_modules', 'done'])
 
-    const entities = codeModulesOf()
-    expect(entities).toHaveLength(2)
-    expect(entities.map(e => e.properties.moduleName).sort()).toEqual(['com.acme.order', 'web'])
+    const [, params] = registerCodeModulesCalls().at(-1)
+    expect(params.modules.map(m => m.file).sort()).toEqual(['demo-repo/com.acme.order', 'demo-repo/web'])
     expect(sidecarInvokeMock).toHaveBeenCalledWith('code.register_modules', { repoPath: '/tmp/demo-repo', projectId: PROJECT })
     expect(dbCloseMock).toHaveBeenCalled()
   })
 
-  it('re-indexing the same repo keeps the graph deduplicated', async () => {
-    window.__FLOWFORGE_MODE__ = 'tauri'
+  it('re-indexing the same repo re-invokes the sidecar upsert', async () => {
     mockTauriIndex()
     await startIndexing(PROJECT, REPO, 'demo-repo')
     await startIndexing(PROJECT, REPO, 'demo-repo')
-    expect(codeModulesOf()).toHaveLength(2)
+    expect(registerCodeModulesCalls()).toHaveLength(2)
   })
 
   it('still completes the index when the module rollup fails', async () => {
-    window.__FLOWFORGE_MODE__ = 'tauri'
     mockTauriIndex()
     dbSelectMock.mockRejectedValue(new Error('db locked'))
 
     const updated = await startIndexing(PROJECT, REPO, 'demo-repo')
     expect(updated.status).toBe('ready')
     expect(updated.modulesRegistered).toBe(0)
-    expect(codeModulesOf()).toHaveLength(0)
+    expect(registerCodeModulesCalls()).toHaveLength(0)
   })
 
   it('marks the index as error when the tauri command fails', async () => {
-    window.__FLOWFORGE_MODE__ = 'tauri'
     invokeMock.mockRejectedValue(new Error('tree-sitter exploded'))
 
     const updated = await startIndexing(PROJECT, REPO, 'demo-repo')
     expect(updated.status).toBe('error')
     expect(updated.error).toContain('tree-sitter exploded')
-  })
-})
-
-// ─── startIndexing (web mock unchanged) ─────────────────────────
-
-describe('startIndexing — web mode', () => {
-  it('keeps the mock behavior and never touches tauri or the graph', async () => {
-    window.__FLOWFORGE_MODE__ = 'web'
-    vi.useFakeTimers()
-
-    const promise = startIndexing(PROJECT, REPO, 'demo-repo')
-    await vi.advanceTimersByTimeAsync(2000)
-    const updated = await promise
-
-    expect(updated.status).toBe('ready')
-    expect(updated.language).toEqual(['TypeScript', 'JavaScript', 'JSON', 'CSS'])
-    expect(invokeMock).not.toHaveBeenCalled()
-    expect(sidecarInvokeMock).not.toHaveBeenCalled()
-    expect(codeModulesOf()).toHaveLength(0)
-    expect(getIndex(REPO).status).toBe('ready')
   })
 })

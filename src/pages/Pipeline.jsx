@@ -8,23 +8,24 @@ import {
   Download, Copy, Settings, Sparkles, Target,
   ListChecks, FileCode, Plug, Shield, Zap,
   Trash2, Plus, User, CheckCircle2, XCircle,
-  Link2, GitFork, ArrowDown, CircleDot,
+  Link2, GitFork, ArrowDown, CircleDot, Pencil, Archive,
   Upload, FolderOpen, FileUp, Clipboard, AlertCircle,
+  LayoutTemplate,
 } from 'lucide-react'
 import { useApp } from '@/context/AppContext'
 import { useSidecar } from '@/context/SidecarContext'
-import { detectRuntimeMode } from '@/adapters/StorageService'
 import { getRepositories, createBranch, pushBranch, buildFeatureBranchName, supportsGitOps } from '@/services/repository'
+import { getIndexes } from '@/services/codebaseIndex'
 import { createGraphRuntime } from '@/services/graphRuntime'
 import { getProjectDAG } from '@/data/flowEngine'
 import AiChatPanel from '@/components/AiChatPanel'
 import DelegatePanel from '@/components/DelegatePanel'
 import { collectAgentMcpServers, collectAllowedTools, findStageAgent } from '@/services/mcpConfig'
 import { generateDeliverable, chatWithStage, aiReview as aiReviewService, hasAPIKey, getCustomModels, getActiveModel } from '@/services/ai'
-import { getAIContext } from '@/services/graph'
 import { getStageDefinition } from '@/data/stages'
 import { Toggle } from '@/components/ui/Toggle'
-import { getTraceabilityChain as getGraphTraceabilityChain, getKnowledgeGraph } from '@/services/graph'
+import { getUpstreamContext, getTraceabilityChain, registerDeliverable, registerReview, evaluateChainRules } from '@/services/knowledge'
+import { generatePrototype, savePrototype, loadPrototype, getPrototypePath } from '@/services/prototype'
 
 // ─── Priority color mapping (P0 red / P1 orange / P2 blue) ───
 const priorityColors = {
@@ -74,10 +75,15 @@ export default function Pipeline() {
   const [newDesc, setNewDesc] = useState('')
   const [newPriority, setNewPriority] = useState('P1')
   const [newAssignee, setNewAssignee] = useState('')
+  // Edit mode reuses the create dialog; null = creating, id = editing that delivery
+  const [editingDeliveryId, setEditingDeliveryId] = useState(null)
+  // Show archived deliveries in the left list
+  const [showArchived, setShowArchived] = useState(false)
 
   const {
     currentProject, showToast, currentUser,
-    deliveries, stageNames, agents, createDelivery, advanceDeliveryStage,
+    deliveries, stageNames, agents, createDelivery,
+    updateDelivery, deleteDelivery, archiveDelivery,
     stageDeliverables, saveStageDeliverable, saveStageReview,
     getStageConfig, toggleStageConfigItem, updateStageConfig,
     getEffectiveStageConfig, addDeliveryStageOverride,
@@ -91,7 +97,9 @@ export default function Pipeline() {
   const flowConfig = getFlowConfig(currentProject)
   const totalStages = projectStages.length
 
-  const projectDeliveries = deliveries.filter(d => d.projectId === currentProject.id)
+  const projectDeliveries = deliveries
+    .filter(d => d.projectId === currentProject.id)
+    .filter(d => showArchived || !d.archived)
   const [selectedDeliveryId, setSelectedDeliveryId] = useState(
     projectDeliveries.length > 0 ? projectDeliveries[0].id : ''
   )
@@ -104,7 +112,7 @@ export default function Pipeline() {
 
   // Reset selection when project changes
   useEffect(() => {
-    const list = deliveries.filter(d => d.projectId === currentProject.id)
+    const list = deliveries.filter(d => d.projectId === currentProject.id && !d.archived)
     if (list.length > 0) {
       setSelectedDeliveryId(list[0].id)
     } else {
@@ -133,6 +141,56 @@ export default function Pipeline() {
     setEditContent(activeDeliverableData?.content || '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeStage?.id, selectedDeliveryId])
+
+  // ─── HTML 原型（PRD 阶段，t5） ───
+  const [prototypeBusy, setPrototypeBusy] = useState(false)
+  const [prototypeReady, setPrototypeReady] = useState(false)
+  const [prototypePreview, setPrototypePreview] = useState(null)
+
+  // 切换需求时探测本地是否已有原型文件（支持重新生成覆盖）
+  useEffect(() => {
+    let cancelled = false
+    setPrototypeReady(false)
+    setPrototypePreview(null)
+    if (selectedDelivery && currentProject) {
+      loadPrototype(currentProject.id, selectedDelivery.id).then(html => {
+        if (!cancelled) setPrototypeReady(!!html)
+      })
+    }
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDelivery?.id, currentProject?.id])
+
+  const handleGeneratePrototype = async () => {
+    const prdContent = activeDeliverableData?.content
+    if (!prdContent) {
+      showToast('请先生成 PRD 交付物，再生成原型', 'error')
+      return
+    }
+    setPrototypeBusy(true)
+    showToast('AI 正在生成 HTML 原型...', 'info')
+    try {
+      const html = await generatePrototype(prdContent, currentProject.name, selectedDelivery.description || selectedDelivery.title)
+      const path = await savePrototype(currentProject.id, selectedDelivery.id, html)
+      setPrototypeReady(true)
+      setPrototypePreview({ html, path })
+      showToast('原型已生成并保存到本地', 'success')
+    } catch (e) {
+      showToast(`原型生成失败：${e?.message || e}`, 'error')
+    }
+    setPrototypeBusy(false)
+  }
+
+  const handleViewPrototype = async () => {
+    const html = await loadPrototype(currentProject.id, selectedDelivery.id)
+    if (!html) {
+      setPrototypeReady(false)
+      showToast('未找到已保存的原型，请重新生成', 'error')
+      return
+    }
+    const path = await getPrototypePath(currentProject.id, selectedDelivery.id)
+    setPrototypePreview({ html, path })
+  }
 
   // Get stage config for active stage (effective = admin + user overrides)
   const stageConfig = selectedDelivery
@@ -196,7 +254,7 @@ export default function Pipeline() {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') {
         if (showImportModal) setShowImportModal(false)
-        if (showCreateDelivery) setShowCreateDelivery(false)
+        if (showCreateDelivery) { setShowCreateDelivery(false); setEditingDeliveryId(null) }
         if (viewDeliverable) setViewDeliverable(null)
       }
     }
@@ -205,10 +263,15 @@ export default function Pipeline() {
   }, [showCreateDelivery, viewDeliverable, showImportModal])
 
   // ─── Traceability Chain ────────────────────────────────────────
-  const refreshTraceability = useCallback(() => {
+  const refreshTraceability = useCallback(async () => {
     if (!currentProject) return
-    const chain = getGraphTraceabilityChain(currentProject.id, selectedDelivery?.id, flowConfig)
-    setTraceabilityData(chain)
+    try {
+      const chain = await getTraceabilityChain(currentProject.id, selectedDelivery?.id, flowConfig)
+      setTraceabilityData(chain)
+    } catch (err) {
+      showToast(`追溯链加载失败：${err?.message || err}`, 'error')
+      setTraceabilityData([])
+    }
   }, [currentProject, selectedDelivery, flowConfig])
 
   useEffect(() => {
@@ -240,7 +303,7 @@ export default function Pipeline() {
       const node = getFlowNode(currentProject.id, stage.id)
       const agent = node?.agentId ? agents.find(a => a.id === node.agentId) : null
       const graphContext = currentProject
-        ? getAIContext(currentProject.id, stage.id, selectedDelivery.id, flowConfig)
+        ? await getUpstreamContext(currentProject.id, stage.id, selectedDelivery.id, flowConfig)
         : null
 
       const response = await chatWithStage(
@@ -299,7 +362,7 @@ export default function Pipeline() {
       }
 
       const graphContext = currentProject
-        ? getAIContext(currentProject.id, stage.id, selectedDelivery.id, flowConfig)
+        ? await getUpstreamContext(currentProject.id, stage.id, selectedDelivery.id, flowConfig)
         : null
       if (graphContext && graphContext.context.length > 0) {
         setGeneratingProgress(`正在生成 ${stage.name}（已引用 ${graphContext.context.length} 个上游交付物）...`)
@@ -327,7 +390,7 @@ export default function Pipeline() {
       setEditContent(content)
 
       if (currentProject) {
-        getKnowledgeGraph().registerDeliverable({
+        await registerDeliverable({
           projectId: currentProject.id,
           deliveryId: selectedDelivery.id,
           stageId: stage.id,
@@ -342,8 +405,7 @@ export default function Pipeline() {
       showToast(`「${stage.name}」交付物生成完成！`, 'success')
 
       if (detailTab === 'traceability') {
-        const chain = getGraphTraceabilityChain(currentProject.id, selectedDelivery.id, flowConfig)
-        setTraceabilityData(chain)
+        refreshTraceability()
       }
     } catch (err) {
       setGeneratingProgress('')
@@ -403,7 +465,7 @@ export default function Pipeline() {
 
   const registerImportedDeliverable = (content, sourceName) => {
     if (!currentProject || !activeStage) return
-    getKnowledgeGraph().registerDeliverable({
+    registerDeliverable({
       projectId: currentProject.id,
       deliveryId: selectedDelivery.id,
       stageId: activeStage.id,
@@ -423,81 +485,17 @@ export default function Pipeline() {
 
   // ─── Real AI Generate ──────────────────────────────────────────
   const handleGenerate = async (stage) => {
+    // 双系统收敛：生成统一走 sidecar LangGraph 执行引擎（含上下文包/
+    // 知识召回/评审/反思），前端直调 LLM 的路径已移除
     if (!selectedDelivery) {
       showToast('请先选择一个交付需求', 'info')
       return
     }
-    if (!hasAPIKey()) {
-      showToast('请先在「设置 → 全局配置」中配置 AI API Key', 'error')
+    if (!graphRt.available) {
+      showToast('执行引擎不可用：sidecar 未就绪，请重启应用后重试', 'error')
       return
     }
-
-    setIsGenerating(true)
-    setGeneratingProgress('正在连接 AI 服务...')
-    showToast(`AI 正在生成「${stage.name}」交付物...`, 'info')
-
-    try {
-      const stageIndex = projectStages.findIndex(s => s.id === stage.id)
-      const prevContent = getPreviousDeliverableContent(stageIndex)
-
-      // ─── Use agent config from flow node ───
-      const node = getFlowNode(currentProject.id, stage.id)
-      const agent = node?.agentId ? agents.find(a => a.id === node.agentId) : null
-      const genConfig = {
-        model: agent?.model || stageConfig.model || null,
-        temperature: agent?.temperature ?? stageConfig.temperature ?? 0.7,
-        prompt: agent?.systemPrompt || stageConfig.prompt || stage.guidance?.template || '',
-      }
-
-      // ─── Knowledge graph: inject upstream context ───
-      const graphContext = currentProject
-        ? getAIContext(currentProject.id, stage.id, selectedDelivery.id, flowConfig)
-        : null
-      if (graphContext && graphContext.context.length > 0) {
-        setGeneratingProgress(`正在生成 ${stage.name}（已引用 ${graphContext.context.length} 个上游交付物）...`)
-      } else {
-        setGeneratingProgress(`正在生成 ${stage.name}...`)
-      }
-
-      const content = await generateDeliverable(
-        stage.id,
-        currentProject.name,
-        selectedDelivery.title,
-        prevContent,
-        genConfig.model,
-        graphContext
-      )
-
-      saveStageDeliverable(selectedDelivery.id, stage.id, content)
-      setEditContent(content)
-
-      // ─── Knowledge graph: register deliverable ───
-      if (currentProject) {
-        getKnowledgeGraph().registerDeliverable({
-          projectId: currentProject.id,
-          deliveryId: selectedDelivery.id,
-          stageId: stage.id,
-          label: `${stage.shortName}-${selectedDelivery.title}`,
-          content,
-          author: 'AI',
-          flowConfig,
-        })
-      }
-
-      setGeneratingProgress('')
-      showToast(`「${stage.name}」交付物生成完成！`, 'success')
-
-      // Refresh traceability if visible
-      if (detailTab === 'traceability') {
-        const chain = getGraphTraceabilityChain(currentProject.id, selectedDelivery.id, flowConfig)
-        setTraceabilityData(chain)
-      }
-    } catch (err) {
-      setGeneratingProgress('')
-      showToast(`生成失败：${err.message}`, 'error')
-    } finally {
-      setIsGenerating(false)
-    }
+    await handleGraphAdvance()
   }
 
   // ─── Real AI Review ────────────────────────────────────────────
@@ -527,29 +525,15 @@ export default function Pipeline() {
       const mergedReview = { ...review, humanReview: existingReview.humanReview || null }
       saveStageReview(selectedDelivery.id, stage.id, mergedReview)
 
-      // ─── Knowledge graph: register review ───
+      // ─── Knowledge graph: register review（sidecar 会 upsert 交付物质量分并创建 Review 实体）───
       if (currentProject) {
-        const graph = getKnowledgeGraph()
-        // Find or create the deliverable entity for this stage
-        const entities = graph.getEntities({
-          projectId: currentProject.id,
-          deliveryId: selectedDelivery.id,
-          stage: stage.id,
-        })
-        const deliverableEntity = entities[0]
-        if (deliverableEntity) {
-          // Update quality score on the deliverable entity
-          graph.updateEntity(deliverableEntity.id, {
-            properties: { qualityScore: review.totalScore },
-          })
-        }
-        // Register the review entity
-        graph.registerReview({
+        await registerReview({
           projectId: currentProject.id,
           deliveryId: selectedDelivery.id,
           stageId: stage.id,
-          entityId: deliverableEntity?.id,
-          review: { ...review, type: 'ai', reviewer: 'AI' },
+          content: deliverableData.content,
+          review,
+          flowConfig,
         })
       }
 
@@ -560,8 +544,7 @@ export default function Pipeline() {
 
       // Refresh traceability if visible
       if (detailTab === 'traceability') {
-        const chain = getGraphTraceabilityChain(currentProject.id, selectedDelivery.id, flowConfig)
-        setTraceabilityData(chain)
+        refreshTraceability()
       }
     } catch (err) {
       showToast(`评审失败：${err.message}`, 'error')
@@ -586,37 +569,94 @@ export default function Pipeline() {
     showToast(passed ? '人工评审已通过' : '人工评审已驳回', passed ? 'success' : 'info')
   }
 
-  // ─── Sidecar graph runtime (Phase 2b, tauri-only; web keeps flowEngine) ───
+  // ─── Sidecar graph runtime (harness backbone, tauri-only) ───
   const sidecarApi = useSidecar()
   const graphRt = useMemo(() => createGraphRuntime(sidecarApi), [sidecarApi])
   // { threadId, status: 'running'|'interrupted'|'completed'|'error', stage, streamText, error }
   const [graphExec, setGraphExec] = useState(null)
+  // Agent 工具调用轨迹（graph/tool_call 事件序列，供执行面板展示）
+  const [toolLog, setToolLog] = useState([])
+  // review 驳回通知（graph/review_rejected）：得分/阈值/重试次数
+  const [reviewRejection, setReviewRejection] = useState(null)
+
+  // refs：事件回调在 useEffect 闭包中需要最新上下文，避免 stale closure
+  const graphExecRef = useRef(null)
+  useEffect(() => { graphExecRef.current = graphExec }, [graphExec])
+  const deliveryCtxRef = useRef({})
+  deliveryCtxRef.current = {
+    deliveryId: selectedDelivery?.id,
+    activeStageId: activeStage?.id,
+    lastStageIndex: totalStages - 1,
+  }
 
   useEffect(() => {
     if (!graphRt.available) return undefined
     return graphRt.onGraphEvent(({ method, params }) => {
-      setGraphExec(prev => {
-        // ignore events from other threads once one is being tracked
-        if (prev?.threadId && params?.threadId && params.threadId !== prev.threadId) return prev
-        switch (method) {
-          case 'graph/stage_start':
-            return { ...(prev || {}), threadId: params.threadId, status: 'running', stage: params.stage, streamText: '' }
-          case 'graph/stream':
-            return prev ? { ...prev, streamText: ((prev.streamText || '') + params.delta).slice(-300) } : prev
-          case 'graph/stage_done':
-            return { ...(prev || {}), threadId: params.threadId, status: 'running', stage: params.stage, lastScore: params.reviewScore }
-          case 'graph/interrupted':
-            return { ...(prev || {}), threadId: params.threadId, status: 'interrupted', next: params.next }
-          case 'graph/completed':
-            return { ...(prev || {}), threadId: params.threadId, status: 'completed' }
-          case 'graph/error':
-            return { ...(prev || {}), threadId: params.threadId, status: 'error', error: params.message }
-          default:
-            return prev
+      const prev = graphExecRef.current
+      // ignore events from other threads once one is being tracked
+      if (prev?.threadId && params?.threadId && params.threadId !== prev.threadId) return
+      switch (method) {
+        case 'graph/stage_start':
+          setGraphExec({ ...(prev || {}), threadId: params.threadId, status: 'running', stage: params.stage, streamText: '' })
+          break
+        case 'graph/stream':
+          if (prev) setGraphExec({ ...prev, streamText: ((prev.streamText || '') + params.delta).slice(-300) })
+          break
+        case 'graph/tool_call':
+          // Agent 轨迹：记录每轮工具调用（工具名/参数/结果摘要）
+          setToolLog(log => [...log.slice(-99), {
+            stage: params.stage, tool: params.tool, round: params.round,
+            args: params.arguments, result: params.result,
+          }])
+          setGraphExec(p => p ? { ...p, lastTool: params.tool } : p)
+          break
+        case 'graph/stage_done': {
+          // ── 交付物回写闭环：sidecar 生成的交付物写入前端存储 ──
+          const { deliveryId, activeStageId } = deliveryCtxRef.current
+          const targetDelivery = params.deliveryId || deliveryId
+          if (targetDelivery && params.stage) {
+            if (typeof params.content === 'string' && params.content) {
+              saveStageDeliverable(targetDelivery, params.stage, params.content)
+              // 当前正在查看该阶段 → 编辑器同步最新内容
+              if (targetDelivery === deliveryId && params.stage === activeStageId) {
+                setEditContent(params.content)
+              }
+            }
+            if (params.review) saveStageReview(targetDelivery, params.stage, params.review)
+          }
+          setGraphExec({ ...(prev || {}), threadId: params.threadId, status: 'running', stage: params.stage, lastScore: params.reviewScore })
+          showToast(`「${params.stage}」阶段产出完成${typeof params.reviewScore === 'number' ? `（评审 ${params.reviewScore} 分）` : ''}`, 'success')
+          break
         }
-      })
+        case 'graph/review_rejected':
+          setReviewRejection({
+            score: params.score, threshold: params.threshold,
+            retryCount: params.retryCount, retryTarget: params.retryTarget,
+          })
+          showToast(`评审驳回（${params.score} < ${params.threshold}），已退回「${params.retryTarget}」重做`, 'warning')
+          break
+        case 'graph/interrupted':
+          setGraphExec({ ...(prev || {}), threadId: params.threadId, status: 'interrupted', next: params.next, interrupts: params.interrupts, currentStage: params.currentStage })
+          break
+        case 'graph/completed': {
+          // 全链路完成 → 交付进度同步至末阶段
+          const { deliveryId: ctxDeliveryId, lastStageIndex } = deliveryCtxRef.current
+          const targetDelivery = params.deliveryId || ctxDeliveryId
+          if (targetDelivery) updateDelivery(targetDelivery, { currentStageIndex: lastStageIndex })
+          setGraphExec({ ...(prev || {}), threadId: params.threadId, status: 'completed' })
+          setReviewRejection(null)
+          showToast('全链路交付完成', 'success')
+          break
+        }
+        case 'graph/error':
+          setGraphExec({ ...(prev || {}), threadId: params.threadId, status: 'error', error: params.message })
+          showToast(`执行引擎错误：${params.message}`, 'error')
+          break
+        default:
+          break
+      }
     })
-  }, [graphRt])
+  }, [graphRt, saveStageDeliverable, saveStageReview, updateDelivery, showToast])
 
   // Start or resume the sidecar-hosted LangGraph run for the selected delivery
   const handleGraphAdvance = async () => {
@@ -639,6 +679,9 @@ export default function Pipeline() {
       }
       // Phase 4: agent bound to the current stage carries the MCP tool config
       const stageAgent = findStageAgent(agents, getFlowNode(currentProject.id, activeStage?.id))
+      // 代码索引接入：优先已就绪索引仓库，交付流上下文包自动注入相关代码
+      const indexedRepo = getIndexes(currentProject.id).find(i => i.status === 'ready' && i.repoPath)
+      const deliveryRepoPath = indexedRepo?.repoPath || getRepositories(currentProject.id)[0]?.path
       const res = await graphRt.startDelivery({
         projectId: currentProject.id,
         deliveryId: selectedDelivery.id,
@@ -648,6 +691,7 @@ export default function Pipeline() {
         modelConfig: { endpoint: model.endpoint, apiKey: model.apiKey, modelId: model.modelId },
         mcpServers: collectAgentMcpServers(stageAgent),
         allowedTools: collectAllowedTools(stageAgent),
+        ...(deliveryRepoPath ? { repoPath: deliveryRepoPath } : {}),
       })
       setGraphExec({ threadId: res.threadId, status: 'running', stage: null, streamText: '' })
       showToast('已启动执行引擎（LangGraph）', 'success')
@@ -656,58 +700,65 @@ export default function Pipeline() {
     }
   }
 
+  // ─── 门禁确认中心：中断原因推导 + 人工确认操作 ───
+  // interrupted 分两类：review 门禁（interruptBefore）等待人工确认进入评审；
+  // delegate/manual 节点等待外部注入交付物（DelegatePanel 导入通道）
+  const gateInterrupt = (() => {
+    if (graphExec?.status !== 'interrupted') return null
+    const interrupts = graphExec.interrupts || []
+    const awaiting = interrupts.find(i => i?.value?.reason === 'awaiting_external_deliverable')
+    if (awaiting) return { kind: 'delegate', stage: awaiting.node }
+    const next = (graphExec.next || [])[0] || 'review'
+    return { kind: 'review-gate', stage: next, prevStage: graphExec.currentStage }
+  })()
+
+  // 门禁确认：继续执行（review 门禁通过人工确认后放行）
+  const handleGateConfirm = async () => {
+    if (!graphExec?.threadId) return
+    try {
+      await graphRt.continueDelivery(graphExec.threadId)
+      setGraphExec(prev => (prev ? { ...prev, status: 'running' } : prev))
+      showToast('门禁已确认，继续执行', 'success')
+    } catch (e) {
+      showToast(`继续执行失败：${e?.message || e}`, 'error')
+    }
+  }
+
+  // 中止当前执行（用户主动放弃本轮运行）
+  const handleAbortRun = async () => {
+    if (!graphExec?.threadId) return
+    try {
+      await graphRt.abort(graphExec.threadId)
+      setGraphExec(prev => (prev ? { ...prev, status: 'error', error: '用户已中止执行' } : prev))
+      showToast('已中止执行', 'info')
+    } catch (e) {
+      showToast(`中止失败：${e?.message || e}`, 'error')
+    }
+  }
+
+  // 人工评审后放行：先写入人工评审结论，再续跑引擎
+  const handleGateHumanReview = async (passed) => {
+    if (!selectedDelivery || !graphExec?.threadId) return
+    const targetStage = gateInterrupt?.prevStage || activeStage?.id
+    if (targetStage) {
+      const existing = getDeliverableData(targetStage)?.review || {}
+      saveStageReview(selectedDelivery.id, targetStage, {
+        ...existing,
+        humanReview: { passed, reviewer: currentUser?.name || '当前用户', at: new Date().toISOString() },
+      })
+    }
+    await handleGateConfirm()
+  }
+
   // ─── Advance Stage with Gate Checks ───
   const handleAdvance = () => {
-    // tauri + sidecar ready → delegate to the LangGraph runtime; web mode below unchanged
-    if (graphRt.available) {
-      handleGraphAdvance()
+    // 纯客户端单一 harness 入口：推进统一走 sidecar LangGraph 执行引擎，
+    // 引擎内部完成门禁校验/断点续跑；sidecar 不可用直接报错，不做降级
+    if (!graphRt.available) {
+      showToast('执行引擎不可用：sidecar 未就绪，请重启应用后重试', 'error')
       return
     }
-    if (!selectedDelivery) return
-    const stage = activeStage
-    const deliverableData = getDeliverableData(stage.id)
-
-    // Already at last stage
-    if (selectedDelivery.currentStageIndex >= totalStages - 1) {
-      showToast('当前交付已完成所有阶段', 'success')
-      return
-    }
-
-    // Only allow advance from the current stage
-    if (activeStageIndex !== selectedDelivery.currentStageIndex) {
-      showToast('请回到当前进行中的阶段再推进', 'info')
-      setActiveStageIndex(selectedDelivery.currentStageIndex)
-      return
-    }
-
-    // ─── Gate checks from flow node ───
-    const node = getFlowNode(currentProject.id, stage.id)
-    const gate = node?.gate || { aiReview: false, humanReview: false, manualTrigger: true, threshold: 0 }
-
-    // Gate 1: AI review required but not passed
-    if (gate.aiReview) {
-      const review = deliverableData?.review
-      if (!review || !review.passed) {
-        showToast(`「${stage.name}」需要先通过 AI 评审才能推进`, 'error')
-        return
-      }
-    }
-
-    // Gate 2: Human review required but not passed
-    if (gate.humanReview) {
-      const review = deliverableData?.review
-      if (!review?.humanReview?.passed) {
-        showToast(`「${stage.name}」需要先通过人工评审才能推进`, 'error')
-        return
-      }
-    }
-
-    // Gates passed — advance
-    advanceDeliveryStage(selectedDelivery.id)
-    const nextIdx = selectedDelivery.currentStageIndex + 1
-    setActiveStageIndex(nextIdx)
-    const nextStage = projectStages[nextIdx]
-    showToast(`已推进到「${nextStage?.name || '完成'}」阶段`, 'success')
+    handleGraphAdvance()
   }
 
   // ─── Create Delivery ───
@@ -715,6 +766,18 @@ export default function Pipeline() {
   const handleCreateDelivery = async () => {
     if (!newTitle.trim()) {
       showToast('请输入需求标题', 'info')
+      return
+    }
+    // Edit mode: only update basic fields — branch/deliverables untouched
+    if (editingDeliveryId) {
+      updateDelivery(editingDeliveryId, {
+        title: newTitle.trim(),
+        description: newDesc.trim(),
+        priority: newPriority,
+        assignee: newAssignee,
+      })
+      closeDeliveryDialog()
+      showToast('需求已更新', 'success')
       return
     }
     const newDelivery = {
@@ -727,26 +790,24 @@ export default function Pipeline() {
       currentStageIndex: 0,
       createdAt: new Date().toISOString().split('T')[0],
     }
-    if (detectRuntimeMode() === 'tauri') {
-      const mainRepo = getRepositories(currentProject.id)
-        .find(r => r.isMain && r.status === 'ready' && r.path)
-      if (mainRepo && !supportsGitOps(mainRepo)) {
-        // 本地引用的非 Git 目录：优雅降级，交付流程继续可用
-        showToast('本地目录不是 Git 仓库，跳过分支隔离', 'info')
-      } else if (mainRepo) {
-        const branchName = buildFeatureBranchName(newDelivery.id, newDelivery.title)
-        try {
-          await createBranch(mainRepo.path, branchName, mainRepo.branch || undefined)
-          newDelivery.gitBranch = branchName
-        } catch (e) {
-          // 分支创建失败不阻塞需求创建，仅提示
-          showToast(`特性分支创建失败：${e?.message || e}`, 'error')
-        }
+    const mainRepo = getRepositories(currentProject.id)
+      .find(r => r.isMain && r.status === 'ready' && r.path)
+    if (mainRepo && !supportsGitOps(mainRepo)) {
+      // 本地引用的非 Git 目录：优雅降级，交付流程继续可用
+      showToast('本地目录不是 Git 仓库，跳过分支隔离', 'info')
+    } else if (mainRepo) {
+      const branchName = buildFeatureBranchName(newDelivery.id, newDelivery.title)
+      try {
+        await createBranch(mainRepo.path, branchName, mainRepo.branch || undefined)
+        newDelivery.gitBranch = branchName
+      } catch (e) {
+        // 分支创建失败不阻塞需求创建，仅提示
+        showToast(`特性分支创建失败：${e?.message || e}`, 'error')
       }
     }
     createDelivery(newDelivery)
     setSelectedDeliveryId(newDelivery.id)
-    setShowCreateDelivery(false)
+    closeDeliveryDialog()
     setNewTitle('')
     setNewDesc('')
     setNewPriority('P1')
@@ -779,7 +840,29 @@ export default function Pipeline() {
     setPushingBranch(false)
   }
 
+  const openEditDelivery = (d) => {
+    setEditingDeliveryId(d.id)
+    setNewTitle(d.title)
+    setNewDesc(d.description || '')
+    setNewPriority(d.priority || 'P1')
+    setNewAssignee(d.assignee || '')
+    setShowCreateDelivery(true)
+  }
+
+  const closeDeliveryDialog = () => {
+    setShowCreateDelivery(false)
+    setEditingDeliveryId(null)
+  }
+
+  const handleDeleteDelivery = (d) => {
+    if (!window.confirm(`确定删除需求「${d.title}」？其阶段交付物将一并移除，且不可恢复。`)) return
+    deleteDelivery(d.id)
+    if (selectedDeliveryId === d.id) setSelectedDeliveryId('')
+    showToast(`需求「${d.title}」已删除`, 'success')
+  }
+
   const openCreateDelivery = () => {
+    setEditingDeliveryId(null)
     setNewTitle('')
     setNewDesc('')
     setNewPriority('P1')
@@ -818,7 +901,10 @@ export default function Pipeline() {
     if (!stageGate?.aiReview) return 'none'
     const review = activeDeliverableData?.review
     if (!review) return 'pending'
-    return review.passed ? 'passed' : 'failed'
+    if (!review.passed) return 'failed'
+    // 阈值达标校验（与推进门禁 Gate 1 保持一致）
+    if (stageGate.threshold > 0 && (review.totalScore ?? 0) < stageGate.threshold) return 'failed'
+    return 'passed'
   })()
 
   const humanReviewStatus = (() => {
@@ -1004,9 +1090,15 @@ export default function Pipeline() {
         <div className="delivery-list-panel">
           <div className="delivery-list-header">
             <span className="delivery-list-header-title">交付需求</span>
-            <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={openCreateDelivery} aria-label="新建需求">
-              <Plus size={14} />
-            </button>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--fg-muted)' }}>
+                <Toggle checked={showArchived} onChange={setShowArchived} label="显示已归档需求" size="sm" />
+                已归档
+              </span>
+              <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={openCreateDelivery} aria-label="新建需求">
+                <Plus size={14} />
+              </button>
+            </span>
           </div>
           <div className="delivery-list-scroll">
             {projectDeliveries.length === 0 ? (
@@ -1025,6 +1117,7 @@ export default function Pipeline() {
                   <div
                     key={d.id}
                     className={`delivery-req-card${isActive ? ' active' : ''}`}
+                    style={d.archived ? { opacity: 0.55 } : undefined}
                     role="button"
                     tabIndex={0}
                     aria-label={`选择需求 ${d.title}，状态：${statusLabels[status]}`}
@@ -1037,7 +1130,22 @@ export default function Pipeline() {
                       }
                     }}
                   >
-                    <div className="delivery-req-card-title">{d.title}</div>
+                    <div className="delivery-req-card-title" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {d.title}{d.archived ? '（已归档）' : ''}
+                      </span>
+                      <span style={{ display: 'flex', gap: '2px', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                        <button className="btn btn-ghost" style={{ padding: '2px', opacity: 0.6 }} onClick={() => openEditDelivery(d)} aria-label={`编辑需求 ${d.title}`} title="编辑">
+                          <Pencil size={12} />
+                        </button>
+                        <button className="btn btn-ghost" style={{ padding: '2px', opacity: 0.6 }} onClick={() => { archiveDelivery(d.id, !d.archived); showToast(d.archived ? '已恢复需求' : '需求已归档', 'success') }} aria-label={d.archived ? `恢复需求 ${d.title}` : `归档需求 ${d.title}`} title={d.archived ? '恢复' : '归档'}>
+                          <Archive size={12} />
+                        </button>
+                        <button className="btn btn-ghost" style={{ padding: '2px', opacity: 0.6, color: 'var(--color-error)' }} onClick={() => handleDeleteDelivery(d)} aria-label={`删除需求 ${d.title}`} title="删除">
+                          <Trash2 size={12} />
+                        </button>
+                      </span>
+                    </div>
                     <div className="delivery-req-card-meta">
                       <span className="delivery-priority-tag" style={{ background: priorityColors[d.priority] || 'var(--fg-muted)' }}>
                         {d.priority}
@@ -1364,11 +1472,11 @@ export default function Pipeline() {
                         <button
                           className="stage-quick-action-btn primary"
                           onClick={() => handleGenerate(activeStage)}
-                          disabled={isGenerating || isReviewing || !hasAPIKey() || !isAtCurrentStage}
-                          title={!isAtCurrentStage ? '仅当前阶段可生成' : ''}
+                          disabled={isReviewing || !graphRt.available || !isAtCurrentStage || graphExec?.status === 'running'}
+                          title={!isAtCurrentStage ? '仅当前阶段可生成' : !graphRt.available ? '执行引擎不可用' : '由 sidecar 执行引擎生成（含上下文包与知识召回）'}
                         >
-                          {isGenerating ? <Loader2 size={12} className="spin" /> : <Bot size={12} />}
-                          {activeDeliverableData?.content ? '重新生成' : 'AI 生成交付物'}
+                          {graphExec?.status === 'running' ? <Loader2 size={12} className="spin" /> : <Zap size={12} />}
+                          {graphExec?.status === 'running' ? '引擎执行中' : activeDeliverableData?.content ? '重新生成（引擎）' : '执行引擎生成'}
                         </button>
                       )}
                       <button
@@ -1380,6 +1488,28 @@ export default function Pipeline() {
                         <Upload size={12} />
                         导入交付物
                       </button>
+                      {/* PRD 阶段：HTML 原型生成/预览（t5） */}
+                      {activeStage.id === 'prd' && (
+                        <button
+                          className="stage-quick-action-btn"
+                          onClick={handleGeneratePrototype}
+                          disabled={prototypeBusy || isGenerating || !activeDeliverableData?.content || !hasAPIKey()}
+                          title={!activeDeliverableData?.content ? '请先生成 PRD 交付物' : '基于 PRD 内容生成单文件 HTML 线框原型'}
+                        >
+                          {prototypeBusy ? <Loader2 size={12} className="spin" /> : <LayoutTemplate size={12} />}
+                          {prototypeReady ? '重新生成原型' : '生成原型图'}
+                        </button>
+                      )}
+                      {activeStage.id === 'prd' && prototypeReady && !prototypeBusy && (
+                        <button
+                          className="stage-quick-action-btn"
+                          onClick={handleViewPrototype}
+                          title="预览已保存到本地的 HTML 原型"
+                        >
+                          <Eye size={12} />
+                          查看原型
+                        </button>
+                      )}
                       {stageGate?.aiReview && (
                         <button
                           className="stage-quick-action-btn"
@@ -1548,6 +1678,115 @@ export default function Pipeline() {
                       showToast={showToast}
                     />
 
+                    {/* ── 执行控制中心：引擎状态 + 门禁确认 + Agent 轨迹 ── */}
+                    {(graphExec || reviewRejection) && (
+                      <div className="delivery-exec-center" style={{
+                        border: '1px solid var(--border-color)',
+                        borderRadius: 'var(--radius-lg, 10px)',
+                        background: 'var(--bg-secondary)',
+                        padding: '12px 14px',
+                        display: 'flex', flexDirection: 'column', gap: 10,
+                      }}>
+                        {/* 状态行 */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <Zap size={14} style={{ color: 'var(--color-progress)' }} />
+                          <span style={{ fontWeight: 600, fontSize: 13 }}>执行引擎</span>
+                          {graphExec?.status === 'running' && (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--fg-secondary)', fontSize: 12 }}>
+                              <Loader2 size={12} className="animate-spin" />
+                              正在执行「{graphExec.stage || '准备中'}」{graphExec.lastTool ? ` · 调用 ${graphExec.lastTool}` : ''}
+                            </span>
+                          )}
+                          {graphExec?.status === 'interrupted' && <span style={{ color: 'var(--color-human-review)', fontSize: 12 }}>已暂停，等待人工确认</span>}
+                          {graphExec?.status === 'completed' && <span style={{ color: 'var(--color-success)', fontSize: 12 }}>全链路完成</span>}
+                          {graphExec?.status === 'error' && <span style={{ color: 'var(--color-error)', fontSize: 12 }}>错误：{graphExec.error || '未知'}</span>}
+                          {typeof graphExec?.lastScore === 'number' && (
+                            <span style={{ fontSize: 12, color: 'var(--fg-tertiary)' }}>上阶段评审 {graphExec.lastScore} 分</span>
+                          )}
+                          <span style={{ flex: 1 }} />
+                          {graphExec?.status === 'running' && (
+                            <button className="btn btn-secondary" style={{ padding: '2px 10px', fontSize: 12 }} onClick={handleAbortRun}>
+                              <XCircle size={12} /> 中止
+                            </button>
+                          )}
+                          {graphExec?.status === 'error' && (
+                            <button className="btn btn-secondary" style={{ padding: '2px 10px', fontSize: 12 }} onClick={handleGraphAdvance}>
+                              重新启动
+                            </button>
+                          )}
+                        </div>
+
+                        {/* 实时流式输出摘要 */}
+                        {graphExec?.status === 'running' && graphExec.streamText && (
+                          <div style={{ fontSize: 12, color: 'var(--fg-tertiary)', fontFamily: 'var(--font-mono, monospace)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            …{graphExec.streamText.slice(-160)}
+                          </div>
+                        )}
+
+                        {/* 门禁确认卡片：门禁前人工确认 */}
+                        {gateInterrupt?.kind === 'review-gate' && (
+                          <div style={{ border: '1px solid var(--color-human-review)', borderRadius: 8, padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                            <Shield size={16} style={{ color: 'var(--color-human-review)' }} />
+                            <div style={{ flex: 1, minWidth: 200, fontSize: 13 }}>
+                              <div style={{ fontWeight: 600 }}>门禁待确认：「{gateInterrupt.prevStage || '上一阶段'}」已产出</div>
+                              <div style={{ color: 'var(--fg-tertiary)', fontSize: 12, marginTop: 2 }}>
+                                确认后将进入「{gateInterrupt.stage}」执行 AI 评审；也可先人工评审后再放行
+                              </div>
+                            </div>
+                            <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={handleGateConfirm}>
+                              <Check size={12} /> 确认进入评审
+                            </button>
+                            <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => handleGateHumanReview(true)}>
+                              人工通过并放行
+                            </button>
+                            <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => handleGateHumanReview(false)}>
+                              人工驳回
+                            </button>
+                          </div>
+                        )}
+                        {gateInterrupt?.kind === 'delegate' && (
+                          <div style={{ border: '1px dashed var(--border-color)', borderRadius: 8, padding: '10px 12px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <FileUp size={16} style={{ color: 'var(--fg-secondary)' }} />
+                            <span>「{gateInterrupt.stage}」阶段等待外部交付物 — 请在下方外派面板导入产出，引擎将自动继续</span>
+                          </div>
+                        )}
+
+                        {/* 评审驳回通知条 */}
+                        {reviewRejection && graphExec?.status !== 'interrupted' && (
+                          <div style={{ border: '1px solid var(--color-error)', borderRadius: 8, padding: '10px 12px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                            <AlertCircle size={16} style={{ color: 'var(--color-error)' }} />
+                            <span style={{ flex: 1 }}>
+                              评审驳回：得分 {reviewRejection.score} 低于阈值 {reviewRejection.threshold}，
+                              已退回「{reviewRejection.retryTarget}」重做（第 {reviewRejection.retryCount + 1} 次，上限 3 次）
+                            </span>
+                            <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={handleAbortRun}>
+                              中止自动重试
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Agent 轨迹：工具调用序列 */}
+                        {toolLog.length > 0 && (
+                          <details style={{ fontSize: 12 }}>
+                            <summary style={{ cursor: 'pointer', color: 'var(--fg-secondary)', userSelect: 'none' }}>
+                              Agent 轨迹（{toolLog.length} 次工具调用）
+                            </summary>
+                            <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto' }}>
+                              {toolLog.map((t, i) => (
+                                <div key={i} style={{ display: 'flex', gap: 8, color: 'var(--fg-tertiary)', fontFamily: 'var(--font-mono, monospace)' }}>
+                                  <span style={{ color: 'var(--fg-muted)' }}>#{t.round}</span>
+                                  <span style={{ color: 'var(--color-progress)', minWidth: 120 }}>{t.tool}</span>
+                                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {typeof t.args === 'string' ? t.args.slice(0, 80) : JSON.stringify(t.args).slice(0, 80)}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        )}
+                      </div>
+                    )}
+
                     {/* Advance Bar */}
                     <div className="delivery-advance-bar">
                       <div className="delivery-gate-status">
@@ -1569,7 +1808,7 @@ export default function Pipeline() {
                         )}
                       </div>
                       {/* 交付完成后的显式推送（绝不自动推送） */}
-                      {isAtLastStage && selectedDelivery.gitBranch && detectRuntimeMode() === 'tauri' && (
+                      {isAtLastStage && selectedDelivery.gitBranch && (
                         <button
                           className="btn btn-secondary"
                           onClick={handlePushBranch}
@@ -1678,12 +1917,15 @@ export default function Pipeline() {
                       </h5>
                       <div className="traceability-rules-list">
                         {currentProject && (() => {
-                          const graph = getKnowledgeGraph()
-                          const stageEntity = activeStage ? graph.getEntities({ stage: activeStage.id, projectId: currentProject.id, deliveryId: selectedDelivery?.id })[0] : null
-                          if (!stageEntity) {
+                          const stageEntity = activeStage && traceabilityData
+                            ? traceabilityData
+                                .filter(item => item.stage === activeStage.id)
+                                .flatMap(item => item.entities ?? [])[0]
+                            : null
+                          if (!stageEntity || !traceabilityData) {
                             return <p className="traceability-rules-empty">当前阶段暂无可评估的交付物</p>
                           }
-                          const rules = graph.evaluateRules(stageEntity.id, { flowConfig, targetStage: activeStage.id })
+                          const rules = evaluateChainRules(traceabilityData, stageEntity.id, { flowConfig, targetStage: activeStage.id })
                           return rules.map(rule => (
                             <div key={rule.id} className={`traceability-rule-item ${rule.passed ? 'passed' : 'failed'} ${rule.type}`}>
                               <span className="traceability-rule-icon">
@@ -1923,12 +2165,12 @@ export default function Pipeline() {
       {/* ─── Create Delivery Dialog ─── */}
       {showCreateDelivery && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}
-          onClick={() => setShowCreateDelivery(false)} role="presentation">
+          onClick={closeDeliveryDialog} role="presentation">
           <div style={{ background: 'var(--bg)', borderRadius: '12px', padding: '24px', width: '520px', maxWidth: '90vw', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--border)', boxShadow: '0 8px 32px rgba(0,0,0,0.12)' }}
             onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="create-delivery-title">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 id="create-delivery-title" style={{ fontSize: '16px', fontWeight: 510, margin: 0 }}>新建需求</h3>
-              <button className="btn btn-ghost" onClick={() => setShowCreateDelivery(false)} aria-label="关闭对话框">
+              <h3 id="create-delivery-title" style={{ fontSize: '16px', fontWeight: 510, margin: 0 }}>{editingDeliveryId ? '编辑需求' : '新建需求'}</h3>
+              <button className="btn btn-ghost" onClick={closeDeliveryDialog} aria-label="关闭对话框">
                 <X size={18} />
               </button>
             </div>
@@ -2004,7 +2246,7 @@ export default function Pipeline() {
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '24px' }}>
-              <button className="btn btn-secondary" onClick={() => setShowCreateDelivery(false)}>
+              <button className="btn btn-secondary" onClick={closeDeliveryDialog}>
                 取消
               </button>
               <button
@@ -2013,7 +2255,7 @@ export default function Pipeline() {
                 disabled={!newTitle.trim()}
                 style={{ opacity: newTitle.trim() ? 1 : 0.5 }}
               >
-                创建
+                {editingDeliveryId ? '保存' : '创建'}
               </button>
             </div>
           </div>
@@ -2078,6 +2320,36 @@ export default function Pipeline() {
       )}
 
       {/* Spin animation */}
+      {/* HTML 原型预览弹窗（iframe 内联渲染，t5） */}
+      {prototypePreview && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '24px' }}
+          onClick={() => setPrototypePreview(null)} role="presentation">
+          <div style={{ background: 'var(--bg)', borderRadius: '12px', width: '100%', maxWidth: '1100px', height: '90vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--border)', boxShadow: '0 8px 32px rgba(0,0,0,0.2)', overflow: 'hidden' }}
+            onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="HTML 原型预览">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+              <LayoutTemplate size={16} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+              <span style={{ fontSize: '14px', fontWeight: 600 }}>HTML 原型预览</span>
+              {prototypePreview.path && (
+                <code style={{ fontSize: '11px', color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {prototypePreview.path}
+                </code>
+              )}
+              <div role="button" tabIndex={0} onClick={() => setPrototypePreview(null)}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPrototypePreview(null) } }}
+                style={{ cursor: 'pointer', padding: '4px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--fg-muted)', marginLeft: 'auto' }}>
+                <X size={16} />
+              </div>
+            </div>
+            <iframe
+              title="HTML 原型"
+              srcDoc={prototypePreview.html}
+              sandbox="allow-scripts"
+              style={{ flex: 1, border: 'none', width: '100%', background: '#fff' }}
+            />
+          </div>
+        </div>
+      )}
+
       <style>{`
         @keyframes spin {
           from { transform: rotate(0deg); }

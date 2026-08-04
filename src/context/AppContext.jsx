@@ -1,349 +1,21 @@
-import React, { createContext, useContext, useReducer, useCallback, useMemo } from 'react'
+import React, { createContext, useContext, useReducer, useCallback, useMemo, useEffect } from 'react'
 import { STAGE_DEFINITIONS, STAGE_NAMES, buildDefaultStageConfigs, getProjectFlowConfig, getProjectStages, buildDefaultFlowConfig } from '@/data/stages'
 import { getProjectDAG, dagToStageList, dagToFlowConfigFull } from '@/data/flowEngine'
-import { detectRuntimeMode } from '@/adapters/StorageService'
+import { storage } from '@/adapters/StorageService'
 
-// ═══ Web-mode demo seed data ═════════════════════════════════════
-// The blocks below (users / projects / deliveries) are DEMO data used
-// only in web mode (protects Playwright e2e). Tauri (desktop/production)
-// boots with a clean empty state — see buildInitialState().
-
-// ─── Users (web demo seed) ───────────────────────────────────────
-const users = [
-  { id: 'u1', name: '张明', role: '产品经理', roleTag: 'PM', avatarInitial: '张' },
-  { id: 'u2', name: '李华', role: '架构师', roleTag: '架构', avatarInitial: '李' },
-  { id: 'u3', name: '王磊', role: '测试工程师', roleTag: '测试', avatarInitial: '王' },
-]
-
-// ─── Projects with per-project independent configuration (web demo seed) ─────────
-const projects = [
-  {
-    id: 'p1',
-    name: '智能客服系统 v2.0',
-    stage: 'PRD生成',
-    progress: 68,
-    status: 'active',
-    members: ['张明', '李华', '王磊'],
-    agents: [
-      { name: 'BRD-Writer', model: 'GPT-4o', stage: 'BRD生成', status: 'idle', tasks: 0, enabled: true },
-      { name: 'PRD-Writer', model: 'Claude 3.5 Sonnet', stage: 'PRD生成', status: 'running', tasks: 1, enabled: true },
-      { name: 'Test-Generator', model: 'DeepSeek V3', stage: '测试用例', status: 'idle', tasks: 0, enabled: true },
-      { name: 'Code-Architect', model: 'GPT-4o', stage: '开发方案', status: 'idle', tasks: 0, enabled: true },
-      { name: 'Code-Reviewer', model: 'Claude 3.5 Sonnet', stage: 'Code Review', status: 'running', tasks: 2, enabled: true },
-      { name: 'AI-Reviewer-QA', model: 'GPT-4o-mini', stage: 'AI质量评审', status: 'running', tasks: 3, enabled: true },
-    ],
-    skills: [
-      { name: 'PRD-Generator', desc: '自动生成PRD文档，支持多种模板', stage: 'PRD生成', enabled: true },
-      { name: 'Test-Case-Writer', desc: '基于PRD自动生成测试用例', stage: '测试用例', enabled: true },
-      { name: 'Code-Review-Expert', desc: '代码质量审查和最佳实践检查', stage: 'Code Review', enabled: true },
-      { name: 'Architecture-Planner', desc: '系统架构设计和技术选型', stage: '开发方案', enabled: true },
-    ],
-    rules: [
-      { name: 'PRD完整性规则', desc: '确保PRD包含用户故事、验收标准、非功能需求', stage: 'PRD生成', enabled: true },
-      { name: '代码风格规则', desc: '强制Go/TypeScript代码风格统一', stage: '开发', enabled: true },
-      { name: '测试覆盖率规则', desc: '单元测试覆盖率不低于80%', stage: '自动化测试', enabled: true },
-    ],
-    mcpTools: [
-      { name: 'Code-base MCP', desc: '代码图谱索引和知识问答', enabled: true },
-      { name: 'Git MCP', desc: 'Git操作集成（clone/branch/merge）', enabled: true },
-      { name: 'Jira MCP', desc: 'Jira需求同步', enabled: true },
-      { name: 'Slack MCP', desc: 'Slack通知推送', enabled: true },
-    ],
-    modelMatrix: [
-      { stage: '需求分析', genModel: 'GPT-4o', reviewModel: 'GPT-4o-mini', genTemp: 0.7, reviewTemp: 0.3, tokens: '12.4k', avgTime: '8.2s', passRate: '91%', status: 'connected' },
-      { stage: 'BRD生成', genModel: 'GPT-4o', reviewModel: 'Claude 3.5 Sonnet', genTemp: 0.7, reviewTemp: 0.3, tokens: '28.6k', avgTime: '15.4s', passRate: '88%', status: 'connected' },
-      { stage: 'PRD生成', genModel: 'Claude 3.5 Sonnet', reviewModel: 'GPT-4o', genTemp: 0.6, reviewTemp: 0.3, tokens: '45.2k', avgTime: '22.1s', passRate: '85%', status: 'connected' },
-      { stage: '测试用例', genModel: 'DeepSeek V3', reviewModel: 'GPT-4o-mini', genTemp: 0.5, reviewTemp: 0.2, tokens: '18.8k', avgTime: '12.6s', passRate: '93%', status: 'connected' },
-      { stage: '开发方案', genModel: 'GPT-4o', reviewModel: 'Claude 3.5 Sonnet', genTemp: 0.7, reviewTemp: 0.3, tokens: '36.1k', avgTime: '18.9s', passRate: '82%', status: 'connected' },
-      { stage: '开发', genModel: 'Claude 3.5 Sonnet', reviewModel: '—', genTemp: 0.4, reviewTemp: null, tokens: '156.3k', avgTime: '45.2s', passRate: '—', status: 'connected' },
-      { stage: 'Code Review', genModel: 'GPT-4o', reviewModel: '—', genTemp: 0.3, reviewTemp: null, tokens: '67.8k', avgTime: '28.4s', passRate: '—', status: 'connected' },
-      { stage: '自动化测试', genModel: 'DeepSeek V3', reviewModel: '—', genTemp: 0.2, reviewTemp: null, tokens: '24.5k', avgTime: '35.6s', passRate: '—', status: 'connected' },
-    ],
-    reviewGates: [
-      { stage: '需求分析', aiReview: true, humanReview: true, manualTrigger: true, threshold: 80 },
-      { stage: 'BRD', aiReview: true, humanReview: true, manualTrigger: true, threshold: 80 },
-      { stage: 'PRD', aiReview: true, humanReview: true, manualTrigger: true, threshold: 75 },
-      { stage: '测试用例', aiReview: true, humanReview: false, manualTrigger: true, threshold: 75 },
-      { stage: '开发方案', aiReview: true, humanReview: false, manualTrigger: true, threshold: 75 },
-    ],
-    notifications: {
-      stageComplete: true,
-      aiReviewComplete: true,
-      humanReviewRequest: true,
-      devComplete: true,
-      deliverySuccess: false,
-      errorAlert: true,
-    },
-    pipeline: {
-      stages: [
-        { id: 1, name: '需求分析', icon: 'FileText', status: 'complete', hasAiReview: true, aiReviewStatus: 'complete' },
-        { id: 2, name: 'BRD', icon: 'BookOpen', status: 'complete', hasAiReview: true, aiReviewStatus: 'complete' },
-        { id: 3, name: 'PRD', icon: 'FileText', status: 'progress', hasAiReview: true, aiReviewStatus: 'progress' },
-        { id: 4, name: '测试用例', icon: 'CheckSquare', status: 'ai-review', hasAiReview: true, aiReviewStatus: 'progress' },
-        { id: 5, name: '开发方案', icon: 'Code', status: 'pending', hasAiReview: false, aiReviewStatus: null },
-        { id: 6, name: '开发', icon: 'Terminal', status: 'pending', hasAiReview: false, aiReviewStatus: null },
-        { id: 7, name: 'Code Review', icon: 'Search', status: 'pending', hasAiReview: true, aiReviewStatus: null },
-        { id: 8, name: '自动化测试', icon: 'Zap', status: 'pending', hasAiReview: false, aiReviewStatus: null },
-        { id: 9, name: '交付', icon: 'Package', status: 'pending', hasAiReview: false, aiReviewStatus: null },
-      ],
-    },
-    activities: [
-      { icon: 'CheckCircle', text: 'BRD文档 AI评审通过', time: '10分钟前', color: 'var(--color-success)' },
-      { icon: 'Bot', text: 'PRD-Writer 开始生成用户故事模块', time: '25分钟前', color: 'var(--color-progress)' },
-      { icon: 'AlertTriangle', text: '需求分析阶段 人工评审请求', time: '1小时前', color: 'var(--color-human-review)' },
-      { icon: 'GitBranch', text: '新功能分支 feature/chat-engine 已创建', time: '2小时前', color: 'var(--fg-tertiary)' },
-      { icon: 'Users', text: '王磊 加入项目团队', time: '3小时前', color: 'var(--fg-tertiary)' },
-    ],
-  },
-  {
-    id: 'p2',
-    name: '数据中台重构',
-    stage: '开发',
-    progress: 42,
-    status: 'active',
-    members: ['李华', '王磊'],
-    agents: [
-      { name: 'BRD-Writer', model: 'GPT-4o', stage: 'BRD生成', status: 'idle', tasks: 0, enabled: true },
-      { name: 'Code-Architect', model: 'GPT-4o', stage: '开发方案', status: 'running', tasks: 2, enabled: true },
-      { name: 'Code-Reviewer', model: 'Claude 3.5 Sonnet', stage: 'Code Review', status: 'running', tasks: 4, enabled: true },
-      { name: 'Data-Modeler', model: 'DeepSeek V3', stage: '数据建模', status: 'idle', tasks: 0, enabled: true },
-    ],
-    skills: [
-      { name: 'Code-Review-Expert', desc: '代码质量审查和最佳实践检查', stage: 'Code Review', enabled: true },
-      { name: 'Architecture-Planner', desc: '系统架构设计和技术选型', stage: '开发方案', enabled: true },
-      { name: 'Data-Model-Generator', desc: '数据库模型设计和ER图生成', stage: '数据建模', enabled: true },
-    ],
-    rules: [
-      { name: '代码风格规则', desc: '强制Java/Kotlin代码风格统一', stage: '开发', enabled: true },
-      { name: 'API规范规则', desc: 'REST API设计必须符合OpenAPI 3.0规范', stage: '开发', enabled: true },
-      { name: '数据一致性规则', desc: '所有数据变更必须通过事务保证一致性', stage: '数据建模', enabled: true },
-      { name: '性能基线规则', desc: '核心查询响应时间不超过200ms', stage: '自动化测试', enabled: false },
-    ],
-    mcpTools: [
-      { name: 'Code-base MCP', desc: '代码图谱索引和知识问答', enabled: true },
-      { name: 'Git MCP', desc: 'Git操作集成（clone/branch/merge）', enabled: true },
-      { name: 'Slack MCP', desc: 'Slack通知推送', enabled: true },
-    ],
-    modelMatrix: [
-      { stage: '需求分析', genModel: 'Claude 3.5 Sonnet', reviewModel: 'GPT-4o-mini', genTemp: 0.6, reviewTemp: 0.3, tokens: '15.2k', avgTime: '9.8s', passRate: '89%', status: 'connected' },
-      { stage: 'BRD生成', genModel: 'Claude 3.5 Sonnet', reviewModel: 'GPT-4o', genTemp: 0.6, reviewTemp: 0.3, tokens: '32.1k', avgTime: '18.2s', passRate: '86%', status: 'connected' },
-      { stage: 'PRD生成', genModel: 'Claude 3.5 Sonnet', reviewModel: 'GPT-4o', genTemp: 0.5, reviewTemp: 0.3, tokens: '48.7k', avgTime: '24.5s', passRate: '83%', status: 'connected' },
-      { stage: '测试用例', genModel: 'DeepSeek V3', reviewModel: 'GPT-4o-mini', genTemp: 0.4, reviewTemp: 0.2, tokens: '22.3k', avgTime: '14.1s', passRate: '91%', status: 'connected' },
-      { stage: '开发方案', genModel: 'GPT-4o', reviewModel: 'Claude 3.5 Sonnet', genTemp: 0.6, reviewTemp: 0.3, tokens: '41.5k', avgTime: '20.3s', passRate: '80%', status: 'connected' },
-      { stage: '开发', genModel: 'GPT-4o', reviewModel: '—', genTemp: 0.3, reviewTemp: null, tokens: '189.2k', avgTime: '52.1s', passRate: '—', status: 'connected' },
-      { stage: 'Code Review', genModel: 'Claude 3.5 Sonnet', reviewModel: '—', genTemp: 0.3, reviewTemp: null, tokens: '78.4k', avgTime: '31.2s', passRate: '—', status: 'connected' },
-      { stage: '自动化测试', genModel: 'DeepSeek V3', reviewModel: '—', genTemp: 0.2, reviewTemp: null, tokens: '28.9k', avgTime: '38.4s', passRate: '—', status: 'connected' },
-    ],
-    reviewGates: [
-      { stage: '需求分析', aiReview: true, humanReview: true, manualTrigger: true, threshold: 85 },
-      { stage: 'BRD', aiReview: true, humanReview: true, manualTrigger: true, threshold: 80 },
-      { stage: 'PRD', aiReview: true, humanReview: true, manualTrigger: false, threshold: 80 },
-      { stage: '测试用例', aiReview: true, humanReview: true, manualTrigger: true, threshold: 75 },
-      { stage: '开发方案', aiReview: true, humanReview: true, manualTrigger: true, threshold: 80 },
-    ],
-    notifications: {
-      stageComplete: true,
-      aiReviewComplete: true,
-      humanReviewRequest: true,
-      devComplete: true,
-      deliverySuccess: true,
-      errorAlert: true,
-    },
-    pipeline: {
-      stages: [
-        { id: 1, name: '需求分析', icon: 'FileText', status: 'complete', hasAiReview: true, aiReviewStatus: 'complete' },
-        { id: 2, name: 'BRD', icon: 'BookOpen', status: 'complete', hasAiReview: true, aiReviewStatus: 'complete' },
-        { id: 3, name: 'PRD', icon: 'FileText', status: 'complete', hasAiReview: true, aiReviewStatus: 'complete' },
-        { id: 4, name: '测试用例', icon: 'CheckSquare', status: 'complete', hasAiReview: true, aiReviewStatus: 'complete' },
-        { id: 5, name: '开发方案', icon: 'Code', status: 'complete', hasAiReview: true, aiReviewStatus: 'complete' },
-        { id: 6, name: '开发', icon: 'Terminal', status: 'progress', hasAiReview: false, aiReviewStatus: null },
-        { id: 7, name: 'Code Review', icon: 'Search', status: 'pending', hasAiReview: true, aiReviewStatus: null },
-        { id: 8, name: '自动化测试', icon: 'Zap', status: 'pending', hasAiReview: false, aiReviewStatus: null },
-        { id: 9, name: '交付', icon: 'Package', status: 'pending', hasAiReview: false, aiReviewStatus: null },
-      ],
-    },
-    activities: [
-      { icon: 'Terminal', text: 'Data-Architect 正在生成数据迁移方案', time: '5分钟前', color: 'var(--color-progress)' },
-      { icon: 'CheckCircle', text: '开发方案评审通过', time: '30分钟前', color: 'var(--color-success)' },
-      { icon: 'GitBranch', text: '分支 feature/data-migration 已推送', time: '1小时前', color: 'var(--fg-tertiary)' },
-    ],
-  },
-  {
-    id: 'p3',
-    name: '移动端App升级',
-    stage: '测试用例',
-    progress: 35,
-    status: 'active',
-    members: ['张明', '王磊'],
-    agents: [
-      { name: 'PRD-Writer', model: 'Claude 3.5 Sonnet', stage: 'PRD生成', status: 'idle', tasks: 0, enabled: true },
-      { name: 'Test-Generator', model: 'DeepSeek V3', stage: '测试用例', status: 'running', tasks: 2, enabled: true },
-      { name: 'UI-Reviewer', model: 'GPT-4o', stage: 'UI评审', status: 'idle', tasks: 0, enabled: true },
-    ],
-    skills: [
-      { name: 'Test-Case-Writer', desc: '基于PRD自动生成测试用例', stage: '测试用例', enabled: true },
-      { name: 'UI-Review-Expert', desc: '移动端UI/UX评审和一致性检查', stage: 'UI评审', enabled: true },
-    ],
-    rules: [
-      { name: '移动端适配规则', desc: '确保所有页面适配主流移动设备分辨率', stage: 'UI评审', enabled: true },
-      { name: '性能规则', desc: '首屏加载时间不超过2秒', stage: '自动化测试', enabled: true },
-    ],
-    mcpTools: [
-      { name: 'Code-base MCP', desc: '代码图谱索引和知识问答', enabled: true },
-      { name: 'Git MCP', desc: 'Git操作集成（clone/branch/merge）', enabled: true },
-      { name: 'Figma MCP', desc: 'Figma设计稿同步和标注', enabled: true },
-    ],
-    modelMatrix: [
-      { stage: '需求分析', genModel: 'GPT-4o', reviewModel: 'GPT-4o-mini', genTemp: 0.7, reviewTemp: 0.3, tokens: '10.1k', avgTime: '7.5s', passRate: '92%', status: 'connected' },
-      { stage: 'BRD生成', genModel: 'GPT-4o', reviewModel: 'GPT-4o-mini', genTemp: 0.7, reviewTemp: 0.3, tokens: '24.3k', avgTime: '13.8s', passRate: '90%', status: 'connected' },
-      { stage: 'PRD生成', genModel: 'Claude 3.5 Sonnet', reviewModel: 'GPT-4o', genTemp: 0.6, reviewTemp: 0.3, tokens: '38.9k', avgTime: '19.7s', passRate: '87%', status: 'connected' },
-      { stage: '测试用例', genModel: 'DeepSeek V3', reviewModel: 'GPT-4o-mini', genTemp: 0.5, reviewTemp: 0.2, tokens: '16.2k', avgTime: '11.3s', passRate: '94%', status: 'connected' },
-      { stage: '开发方案', genModel: 'GPT-4o', reviewModel: 'Claude 3.5 Sonnet', genTemp: 0.7, reviewTemp: 0.3, tokens: '30.8k', avgTime: '16.5s', passRate: '84%', status: 'connected' },
-      { stage: '开发', genModel: 'Claude 3.5 Sonnet', reviewModel: '—', genTemp: 0.4, reviewTemp: null, tokens: '120.5k', avgTime: '40.8s', passRate: '—', status: 'connected' },
-      { stage: 'Code Review', genModel: 'GPT-4o', reviewModel: '—', genTemp: 0.3, reviewTemp: null, tokens: '55.2k', avgTime: '25.1s', passRate: '—', status: 'connected' },
-      { stage: '自动化测试', genModel: 'DeepSeek V3', reviewModel: '—', genTemp: 0.2, reviewTemp: null, tokens: '20.7k', avgTime: '32.3s', passRate: '—', status: 'connected' },
-    ],
-    reviewGates: [
-      { stage: '需求分析', aiReview: true, humanReview: true, manualTrigger: true, threshold: 80 },
-      { stage: 'BRD', aiReview: true, humanReview: false, manualTrigger: true, threshold: 75 },
-      { stage: 'PRD', aiReview: true, humanReview: true, manualTrigger: true, threshold: 80 },
-      { stage: '测试用例', aiReview: true, humanReview: false, manualTrigger: false, threshold: 75 },
-      { stage: '开发方案', aiReview: true, humanReview: false, manualTrigger: true, threshold: 75 },
-    ],
-    notifications: {
-      stageComplete: true,
-      aiReviewComplete: false,
-      humanReviewRequest: true,
-      devComplete: true,
-      deliverySuccess: false,
-      errorAlert: true,
-    },
-    pipeline: {
-      stages: [
-        { id: 1, name: '需求分析', icon: 'FileText', status: 'complete', hasAiReview: true, aiReviewStatus: 'complete' },
-        { id: 2, name: 'BRD', icon: 'BookOpen', status: 'complete', hasAiReview: true, aiReviewStatus: 'complete' },
-        { id: 3, name: 'PRD', icon: 'FileText', status: 'complete', hasAiReview: true, aiReviewStatus: 'complete' },
-        { id: 4, name: '测试用例', icon: 'CheckSquare', status: 'progress', hasAiReview: true, aiReviewStatus: 'progress' },
-        { id: 5, name: '开发方案', icon: 'Code', status: 'pending', hasAiReview: false, aiReviewStatus: null },
-        { id: 6, name: '开发', icon: 'Terminal', status: 'pending', hasAiReview: false, aiReviewStatus: null },
-        { id: 7, name: 'Code Review', icon: 'Search', status: 'pending', hasAiReview: true, aiReviewStatus: null },
-        { id: 8, name: '自动化测试', icon: 'Zap', status: 'pending', hasAiReview: false, aiReviewStatus: null },
-        { id: 9, name: '交付', icon: 'Package', status: 'pending', hasAiReview: false, aiReviewStatus: null },
-      ],
-    },
-    activities: [
-      { icon: 'Bot', text: 'Test-Generator 正在生成移动端测试用例', time: '15分钟前', color: 'var(--color-progress)' },
-      { icon: 'CheckCircle', text: 'PRD文档已生成并通过评审', time: '2小时前', color: 'var(--color-success)' },
-    ],
-  },
-  {
-    id: 'p4',
-    name: '内部运维平台',
-    stage: '需求分析',
-    progress: 12,
-    status: 'planning',
-    members: ['李华'],
-    agents: [
-      { name: 'BRD-Writer', model: 'GPT-4o', stage: 'BRD生成', status: 'idle', tasks: 0, enabled: true },
-      { name: 'PRD-Writer', model: 'GPT-4o', stage: 'PRD生成', status: 'idle', tasks: 0, enabled: true },
-    ],
-    skills: [
-      { name: 'PRD-Generator', desc: '自动生成PRD文档，支持多种模板', stage: 'PRD生成', enabled: true },
-    ],
-    rules: [
-      { name: '安全审计规则', desc: '所有运维操作必须记录审计日志', stage: '开发', enabled: true },
-      { name: '权限控制规则', desc: 'RBAC权限模型，最小权限原则', stage: '开发方案', enabled: true },
-    ],
-    mcpTools: [
-      { name: 'Code-base MCP', desc: '代码图谱索引和知识问答', enabled: true },
-      { name: 'Git MCP', desc: 'Git操作集成（clone/branch/merge）', enabled: true },
-    ],
-    modelMatrix: [
-      { stage: '需求分析', genModel: 'GPT-4o', reviewModel: 'GPT-4o-mini', genTemp: 0.7, reviewTemp: 0.3, tokens: '8.6k', avgTime: '6.9s', passRate: '93%', status: 'connected' },
-      { stage: 'BRD生成', genModel: 'GPT-4o', reviewModel: 'GPT-4o-mini', genTemp: 0.7, reviewTemp: 0.3, tokens: '20.1k', avgTime: '12.4s', passRate: '91%', status: 'connected' },
-      { stage: 'PRD生成', genModel: 'GPT-4o', reviewModel: 'GPT-4o-mini', genTemp: 0.6, reviewTemp: 0.3, tokens: '35.4k', avgTime: '17.8s', passRate: '89%', status: 'connected' },
-      { stage: '测试用例', genModel: 'GPT-4o', reviewModel: 'GPT-4o-mini', genTemp: 0.5, reviewTemp: 0.2, tokens: '14.7k', avgTime: '10.2s', passRate: '95%', status: 'connected' },
-      { stage: '开发方案', genModel: 'GPT-4o', reviewModel: 'GPT-4o-mini', genTemp: 0.6, reviewTemp: 0.3, tokens: '28.3k', avgTime: '15.1s', passRate: '86%', status: 'connected' },
-      { stage: '开发', genModel: 'GPT-4o', reviewModel: '—', genTemp: 0.3, reviewTemp: null, tokens: '95.2k', avgTime: '35.6s', passRate: '—', status: 'connected' },
-      { stage: 'Code Review', genModel: 'GPT-4o', reviewModel: '—', genTemp: 0.3, reviewTemp: null, tokens: '42.1k', avgTime: '20.8s', passRate: '—', status: 'connected' },
-      { stage: '自动化测试', genModel: 'GPT-4o', reviewModel: '—', genTemp: 0.2, reviewTemp: null, tokens: '18.3k', avgTime: '28.5s', passRate: '—', status: 'connected' },
-    ],
-    reviewGates: [
-      { stage: '需求分析', aiReview: true, humanReview: true, manualTrigger: true, threshold: 85 },
-      { stage: 'BRD', aiReview: true, humanReview: true, manualTrigger: true, threshold: 85 },
-      { stage: 'PRD', aiReview: true, humanReview: true, manualTrigger: true, threshold: 80 },
-      { stage: '测试用例', aiReview: true, humanReview: true, manualTrigger: true, threshold: 80 },
-      { stage: '开发方案', aiReview: true, humanReview: true, manualTrigger: true, threshold: 80 },
-    ],
-    notifications: {
-      stageComplete: true,
-      aiReviewComplete: true,
-      humanReviewRequest: true,
-      devComplete: false,
-      deliverySuccess: false,
-      errorAlert: true,
-    },
-    pipeline: {
-      stages: [
-        { id: 1, name: '需求分析', icon: 'FileText', status: 'progress', hasAiReview: true, aiReviewStatus: 'progress' },
-        { id: 2, name: 'BRD', icon: 'BookOpen', status: 'pending', hasAiReview: true, aiReviewStatus: null },
-        { id: 3, name: 'PRD', icon: 'FileText', status: 'pending', hasAiReview: true, aiReviewStatus: null },
-        { id: 4, name: '测试用例', icon: 'CheckSquare', status: 'pending', hasAiReview: true, aiReviewStatus: null },
-        { id: 5, name: '开发方案', icon: 'Code', status: 'pending', hasAiReview: false, aiReviewStatus: null },
-        { id: 6, name: '开发', icon: 'Terminal', status: 'pending', hasAiReview: false, aiReviewStatus: null },
-        { id: 7, name: 'Code Review', icon: 'Search', status: 'pending', hasAiReview: true, aiReviewStatus: null },
-        { id: 8, name: '自动化测试', icon: 'Zap', status: 'pending', hasAiReview: false, aiReviewStatus: null },
-        { id: 9, name: '交付', icon: 'Package', status: 'pending', hasAiReview: false, aiReviewStatus: null },
-      ],
-    },
-    activities: [
-      { icon: 'FileText', text: '需求分析文档正在生成中', time: '3分钟前', color: 'var(--color-progress)' },
-    ],
-  },
-]
+// ─── Local persistence keys (SQLite kv_store via StorageService) ──
+export const PROJECTS_KEY = 'flowforge_projects'
+export const DELIVERIES_KEY = 'flowforge_deliveries'
+export const STAGE_DELIVERABLES_KEY = 'flowforge_stage_deliverables'
 
 // ─── Pipeline stage names (imported from centralized definitions) ─
 const stageNames = STAGE_NAMES
 
-// ─── Deliveries (需求交付记录，web demo seed) ────────────────
-const deliveries = [
-  {
-    id: 'd1',
-    title: '智能客服对话引擎升级',
-    description: '支持多轮对话、意图识别增强、知识库实时检索',
-    priority: 'P0',
-    projectId: 'p1',
-    assignee: '张明',
-    currentStageIndex: 2, // PRD stage (0-based)
-    createdAt: '2026-06-25',
-  },
-  {
-    id: 'd2',
-    title: '数据中台ETL流程优化',
-    description: '重构ETL管道，支持实时流处理，降低延迟至秒级',
-    priority: 'P1',
-    projectId: 'p2',
-    assignee: '李华',
-    currentStageIndex: 5, // 开发 stage
-    createdAt: '2026-06-20',
-  },
-  {
-    id: 'd3',
-    title: '移动端消息推送SDK',
-    description: '集成Firebase和APNs，支持离线消息和本地通知',
-    priority: 'P2',
-    projectId: 'p1',
-    assignee: '王磊',
-    currentStageIndex: 8, // 交付 stage (completed)
-    createdAt: '2026-06-10',
-  },
-]
 
 // ─── Top-level Agents (global, decoupled from projects) ──────────
-// NOT demo data: these are the system default capability definitions.
+// System default capability definitions.
 // DEFAULT_STAGE_AGENTS (src/data/stages.js) binds pipeline stages to
-// a1~a5 by id and getStageConfig resolves them, so they are kept in
-// BOTH web and tauri modes.
+// a1~a5 by id and getStageConfig resolves them.
 const agents = [
   {
     id: 'a1',
@@ -431,12 +103,7 @@ const agents = [
   },
 ]
 
-// ─── Initial state (dual runtime) ────────────────────────────────
-// Ensure all initial projects have stageConfigs
-const projectsWithConfigs = projects.map(p => ({
-  ...p,
-  stageConfigs: p.stageConfigs || buildDefaultStageConfigs(),
-}))
+// ─── Initial state ───────────────────────────────────────────────
 
 // Neutral placeholder shown before the user creates a real project.
 // Not part of state.projects — many components dereference currentProject
@@ -473,15 +140,20 @@ function buildEmptyWorkspaceProject() {
 }
 
 /**
- * Build the initial state for the given runtime mode.
- *  - 'tauri' (desktop/production): NO demo business data — users holds only
- *    a local workspace user (first-run experience), projects/deliveries are
- *    empty. System default agents are kept (functional stage bindings).
- *  - 'web': demo seed kept intact (protects Playwright e2e).
+ * Build the initial state. Pure client-side app: boots with a local
+ * workspace user, then hydrates projects / deliveries / stage
+ * deliverables from local persistence (SQLite kv_store). System
+ * default agents are kept (functional stage bindings).
  * Exported for unit tests.
  */
-export function buildInitialState(mode = detectRuntimeMode()) {
-  const base = {
+export function buildInitialState() {
+  const localUser = { id: 'u-local', name: '我的工作区', role: '本机用户', roleTag: '本机', avatarInitial: '我' }
+  // Ensure all persisted projects have stageConfigs
+  const persistedProjects = (storage.getJSON(PROJECTS_KEY, []) || []).map(p => ({
+    ...p,
+    stageConfigs: p.stageConfigs || buildDefaultStageConfigs(),
+  }))
+  return {
     agents,
     isAuthenticated: true,
     toasts: [],
@@ -489,32 +161,17 @@ export function buildInitialState(mode = detectRuntimeMode()) {
     // User-level preferences (not project-scoped)
     devMode: 'bridge-agent', // 'uri-scheme' | 'bridge-agent' | 'cloud' | 'spec'
     // Deliverable content storage: { [deliveryId]: { [stageId]: { content, review, generatedAt } } }
-    stageDeliverables: {},
-  }
-
-  if (mode === 'tauri') {
-    const localUser = { id: 'u-local', name: '我的工作区', role: '本机用户', roleTag: '本机', avatarInitial: '我' }
-    return {
-      ...base,
-      users: [localUser],
-      projects: [],
-      deliveries: [],
-      currentUser: localUser,
-      currentProject: buildEmptyWorkspaceProject(),
-    }
-  }
-
-  return {
-    ...base,
-    users,
-    projects: projectsWithConfigs,
-    deliveries,
-    currentUser: users[0],
-    currentProject: projectsWithConfigs[0],
+    stageDeliverables: storage.getJSON(STAGE_DELIVERABLES_KEY, {}) || {},
+    users: [localUser],
+    projects: persistedProjects,
+    deliveries: storage.getJSON(DELIVERIES_KEY, []) || [],
+    currentUser: localUser,
+    currentProject: persistedProjects[0] || buildEmptyWorkspaceProject(),
   }
 }
 
-const initialState = buildInitialState()
+// Initial state is built lazily at first mount (useReducer init) so the
+// workspace always hydrates from whatever local storage holds at that moment.
 
 // Project-scoped write actions that must not target the read-only placeholder
 // project — otherwise the edits look accepted but are silently lost.
@@ -655,6 +312,23 @@ function appReducer(state, action) {
       return { ...state, projects: [...state.projects, newProject], currentProject }
     }
 
+    case 'DELETE_PROJECT': {
+      const projectId = action.payload
+      const removedDeliveryIds = new Set(
+        state.deliveries.filter(d => d.projectId === projectId).map(d => d.id)
+      )
+      const projects = state.projects.filter(p => p.id !== projectId)
+      const deliveries = state.deliveries.filter(d => d.projectId !== projectId)
+      // Cascade: drop stage deliverables that belonged to removed deliveries
+      const stageDeliverables = Object.fromEntries(
+        Object.entries(state.stageDeliverables).filter(([deliveryId]) => !removedDeliveryIds.has(deliveryId))
+      )
+      const currentProject = state.currentProject.id === projectId
+        ? (projects[0] || buildEmptyWorkspaceProject())
+        : state.currentProject
+      return { ...state, projects, deliveries, stageDeliverables, currentProject }
+    }
+
     case 'ADD_USER': {
       const newUser = action.payload
       return { ...state, users: [...state.users, newUser] }
@@ -685,6 +359,39 @@ function appReducer(state, action) {
         return { ...d, currentStageIndex: d.currentStageIndex + 1 }
       })
       return { ...state, deliveries: updatedDeliveries }
+    }
+
+    case 'UPDATE_DELIVERY': {
+      const { deliveryId, data } = action.payload
+      return {
+        ...state,
+        deliveries: state.deliveries.map(d =>
+          d.id === deliveryId ? { ...d, ...data, updatedAt: new Date().toISOString() } : d
+        ),
+      }
+    }
+
+    case 'DELETE_DELIVERY': {
+      const deliveryId = action.payload
+      const stageDeliverables = { ...state.stageDeliverables }
+      delete stageDeliverables[deliveryId]
+      return {
+        ...state,
+        deliveries: state.deliveries.filter(d => d.id !== deliveryId),
+        stageDeliverables,
+      }
+    }
+
+    case 'ARCHIVE_DELIVERY': {
+      const { deliveryId, archived = true } = action.payload
+      return {
+        ...state,
+        deliveries: state.deliveries.map(d =>
+          d.id === deliveryId
+            ? { ...d, archived, archivedAt: archived ? new Date().toISOString() : null }
+            : d
+        ),
+      }
     }
 
     case 'UPDATE_STAGE_DELIVERABLE': {
@@ -922,7 +629,12 @@ function appReducer(state, action) {
 const AppContext = createContext(null)
 
 export function AppProvider({ children }) {
-  const [state, dispatch] = useReducer(appReducer, initialState)
+  const [state, dispatch] = useReducer(appReducer, undefined, buildInitialState)
+
+  // ─── Local persistence: mirror state slices into SQLite kv_store ───
+  useEffect(() => { storage.setJSON(PROJECTS_KEY, state.projects) }, [state.projects])
+  useEffect(() => { storage.setJSON(DELIVERIES_KEY, state.deliveries) }, [state.deliveries])
+  useEffect(() => { storage.setJSON(STAGE_DELIVERABLES_KEY, state.stageDeliverables) }, [state.stageDeliverables])
 
   const setCurrentUser = useCallback((user) => {
     dispatch({ type: 'SET_CURRENT_USER', payload: user })
@@ -964,6 +676,10 @@ export function AppProvider({ children }) {
     dispatch({ type: 'ADD_PROJECT', payload: project })
   }, [])
 
+  const deleteProject = useCallback((projectId) => {
+    dispatch({ type: 'DELETE_PROJECT', payload: projectId })
+  }, [])
+
   const addUser = useCallback((user) => {
     dispatch({ type: 'ADD_USER', payload: user })
   }, [])
@@ -986,6 +702,18 @@ export function AppProvider({ children }) {
 
   const advanceDeliveryStage = useCallback((deliveryId) => {
     dispatch({ type: 'ADVANCE_DELIVERY_STAGE', payload: deliveryId })
+  }, [])
+
+  const updateDelivery = useCallback((deliveryId, data) => {
+    dispatch({ type: 'UPDATE_DELIVERY', payload: { deliveryId, data } })
+  }, [])
+
+  const deleteDelivery = useCallback((deliveryId) => {
+    dispatch({ type: 'DELETE_DELIVERY', payload: deliveryId })
+  }, [])
+
+  const archiveDelivery = useCallback((deliveryId, archived = true) => {
+    dispatch({ type: 'ARCHIVE_DELIVERY', payload: { deliveryId, archived } })
   }, [])
 
   const saveStageDeliverable = useCallback((deliveryId, stageId, content) => {
@@ -1175,12 +903,16 @@ export function AppProvider({ children }) {
     toggleReviewGate,
     toggleNotification,
     addProject,
+    deleteProject,
     addUser,
     removeUser,
     login,
     logout,
     createDelivery,
     advanceDeliveryStage,
+    updateDelivery,
+    deleteDelivery,
+    archiveDelivery,
     saveStageDeliverable,
     saveStageReview,
     updateStageConfig,
@@ -1206,7 +938,7 @@ export function AppProvider({ children }) {
     getFlowNode,
     getStageGate,
     stageDefinitions: STAGE_DEFINITIONS,
-  }), [state, setCurrentUser, setCurrentProject, setDevMode, showToast, removeToast, updateProjectConfig, toggleProjectConfigItem, toggleReviewGate, toggleNotification, addProject, addUser, removeUser, login, logout, createDelivery, advanceDeliveryStage, saveStageDeliverable, saveStageReview, updateStageConfig, toggleStageConfigItem, getStageConfig, addDeliveryStageOverride, removeDeliveryStageOverride, setDeliveryStageModel, setDeliveryStagePrompt, getEffectiveStageConfig, addAgent, updateAgent, deleteAgent, assignAgentToStage, unassignAgentFromStage, updateProjectFlow, updateFlowNode, resetProjectFlow, getFlowConfig, getProjectStageList, getFlowNode, getStageGate])
+  }), [state, setCurrentUser, setCurrentProject, setDevMode, showToast, removeToast, updateProjectConfig, toggleProjectConfigItem, toggleReviewGate, toggleNotification, addProject, deleteProject, addUser, removeUser, login, logout, createDelivery, advanceDeliveryStage, updateDelivery, deleteDelivery, archiveDelivery, saveStageDeliverable, saveStageReview, updateStageConfig, toggleStageConfigItem, getStageConfig, addDeliveryStageOverride, removeDeliveryStageOverride, setDeliveryStageModel, setDeliveryStagePrompt, getEffectiveStageConfig, addAgent, updateAgent, deleteAgent, assignAgentToStage, unassignAgentFromStage, updateProjectFlow, updateFlowNode, resetProjectFlow, getFlowConfig, getProjectStageList, getFlowNode, getStageGate])
 
   return (
     <AppContext.Provider value={value}>

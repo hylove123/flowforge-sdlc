@@ -24,6 +24,7 @@ import {
 import type { Notifier } from './stageNode.js'
 import { OpenAICompatibleClient, type LLMClient, type ModelConfig } from '../services/llm.js'
 import { buildToolset } from '../tools/toolRegistry.js'
+import { buildBuiltinToolset, mergeToolsets } from '../tools/builtinTools.js'
 import { safeRecordDiff } from '../domain/flywheel.js'
 import type { McpServerConfig } from '../tools/mcpClient.js'
 
@@ -68,6 +69,8 @@ async function buildSession(params: {
   mcpServers?: McpServerConfig[]
   /** Agent-bound skill/MCP names — filters which tools get registered. */
   allowedTools?: string[]
+  /** 交付绑定的仓库路径 — 内置代码智能工具据此检索（引擎 A/B） */
+  repoPath?: string
   /** Phase 6 反思飞轮 — default on; false disables the per-stage reflection step. */
   reflectionEnabled?: boolean
 }): Promise<Session> {
@@ -85,16 +88,17 @@ async function buildSession(params: {
     ? runtime.llmFactory(params.modelConfig)
     : new OpenAICompatibleClient(params.modelConfig)
 
-  // MCP toolset (failure-isolated): broken servers are skipped, and any
-  // toolset build error degrades to tool-less generation
-  let toolset = null
+  // ── Toolset 组装：内置代码智能工具（主路径，会话级总是可用）+ MCP 工具（扩展）──
+  const builtin = buildBuiltinToolset({ projectId, repoPath: params.repoPath ?? null })
+  let mcpTools = null
   if (params.mcpServers && params.mcpServers.length > 0) {
     try {
-      toolset = await buildToolset({ servers: params.mcpServers, allowedTools: params.allowedTools })
+      mcpTools = await buildToolset({ servers: params.mcpServers, allowedTools: params.allowedTools })
     } catch (e) {
       runtime.notify('tools/error', { message: e instanceof Error ? e.message : String(e) })
     }
   }
+  const toolset = mergeToolsets(builtin, mcpTools)
 
   const app = buildSdlcGraph(dag, {
     llm,
@@ -194,6 +198,8 @@ export const graphMethods = {
       contextPackage: {
         projectName: params.projectName ?? params.projectId,
         requirement: params.requirement ?? '',
+        // 代码索引接入：上下文引擎据此注入「相关代码」节（无索引时静默省略）
+        ...(typeof params.repoPath === 'string' && params.repoPath ? { repoPath: params.repoPath } : {}),
       },
     }
     void runGraph(session, input)

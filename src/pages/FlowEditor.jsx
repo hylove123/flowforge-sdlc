@@ -116,15 +116,25 @@ export default function FlowEditor() {
     }))
   }
 
-  // ─── Drag handling ──────────────────────────────────────────
+  // ─── Drag handling ────────────────────────────────────────
+  // 画布内容坐标 = 视口坐标 + 滚动偏移，避免画布滚动后拖拽跳变
+  const toCanvasPoint = (clientX, clientY) => {
+    const el = canvasRef.current
+    const rect = el.getBoundingClientRect()
+    return {
+      x: clientX - rect.left + el.scrollLeft,
+      y: clientY - rect.top + el.scrollTop,
+    }
+  }
+
   const handleNodeMouseDown = (e, nodeId) => {
     if (e.target.closest('[data-no-drag]')) return
     const node = dag.nodes.find(n => n.id === nodeId)
     if (!node) return
-    const rect = canvasRef.current.getBoundingClientRect()
+    const p = toCanvasPoint(e.clientX, e.clientY)
     dragOffset.current = {
-      x: e.clientX - rect.left - node.position.x,
-      y: e.clientY - rect.top - node.position.y,
+      x: p.x - node.position.x,
+      y: p.y - node.position.y,
     }
     setDragging(nodeId)
     setSelectedNode(nodeId)
@@ -132,9 +142,9 @@ export default function FlowEditor() {
 
   const handleCanvasMouseMove = useCallback((e) => {
     if (!dragging) return
-    const rect = canvasRef.current.getBoundingClientRect()
-    const x = Math.max(0, e.clientX - rect.left - dragOffset.current.x)
-    const y = Math.max(0, e.clientY - rect.top - dragOffset.current.y)
+    const p = toCanvasPoint(e.clientX, e.clientY)
+    const x = Math.max(0, p.x - dragOffset.current.x)
+    const y = Math.max(0, p.y - dragOffset.current.y)
     updateNode(dragging, { position: { x, y } })
   }, [dragging])
 
@@ -204,8 +214,24 @@ export default function FlowEditor() {
 
   const selectedNodeData = selectedNode ? getNodeById(selectedNode) : null
 
+  // 连线层/内容层尺寸跟随节点最大坐标，避免拖出固定范围后连线消失
+  const NODE_W = 160
+  const canvasWidth = dag.nodes.length
+    ? Math.max(1400, ...dag.nodes.map(n => n.position.x + NODE_W + 240))
+    : 1400
+  const canvasHeight = dag.nodes.length
+    ? Math.max(600, ...dag.nodes.map(n => n.position.y + 240))
+    : 600
+
   return (
-    <div className="flex flex-col h-full">
+    <div
+      className="flex flex-col relative"
+      style={{
+        // 抵消 .page-content 的 padding，让画布页占满可视区，避免双重滚动
+        height: 'calc(100% + var(--content-padding) * 2)',
+        margin: 'calc(var(--content-padding) * -1)',
+      }}
+    >
       {/* Toolbar */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border)]">
         <div className="flex items-center gap-3">
@@ -288,7 +314,7 @@ export default function FlowEditor() {
           onMouseUp={handleCanvasMouseUp}
           onMouseLeave={handleCanvasMouseUp}
           onClick={(e) => {
-            if (e.target === canvasRef.current) {
+            if (e.target === canvasRef.current || e.target.dataset.canvasContent) {
               setSelectedNode(null)
               setShowConfig(false)
               setConnecting(null)
@@ -296,7 +322,12 @@ export default function FlowEditor() {
           }}
         >
           {/* SVG Edges */}
-          <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ minWidth: 1400, minHeight: 600 }}>
+          <svg
+            className="absolute top-0 left-0 pointer-events-none"
+            width={canvasWidth}
+            height={canvasHeight}
+            style={{ minWidth: canvasWidth, minHeight: canvasHeight }}
+          >
             <defs>
               <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
                 <polygon points="0 0, 8 3, 0 6" fill="var(--fg-muted)" />
@@ -317,6 +348,8 @@ export default function FlowEditor() {
             ))}
           </svg>
 
+          {/* 内层内容容器：承载节点/连线的实际尺寸 */}
+          <div data-canvas-content="1" style={{ width: canvasWidth, height: canvasHeight, position: 'relative' }}>
           {/* Nodes */}
           {dag.nodes.map(node => {
             const isSelected = selectedNode === node.id
@@ -424,6 +457,7 @@ export default function FlowEditor() {
               </div>
             )
           })}
+          </div>
 
           {/* Connecting hint */}
           {connecting && (

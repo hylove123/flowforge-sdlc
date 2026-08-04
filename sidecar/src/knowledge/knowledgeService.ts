@@ -52,6 +52,8 @@ export interface RecallInput {
   query?: string
   deliveryId?: string | null
   topK?: number
+  /** Project-specific delivery flow; defaults to the built-in chain. */
+  flowConfig?: ChainItem[] | null
 }
 
 export interface StageRecall {
@@ -275,7 +277,7 @@ export class KnowledgeService {
     const topK = input.topK ?? 5
 
     const upstreamDeliverables: StageRecall['upstreamDeliverables'] = []
-    for (const item of upstreamStagesOf(stageId)) {
+    for (const item of upstreamStagesOf(stageId, input.flowConfig ?? null)) {
       const filter = { projectId, stageId: item.stage, ...(input.deliveryId ? { deliveryId: input.deliveryId } : {}) }
       for (const e of this.graph.getEntities(filter)) {
         if (e.type === 'Review') continue
@@ -308,7 +310,7 @@ export class KnowledgeService {
         createdAt: e.createdAt,
       }))
 
-    const traceChain = this.graph.getTraceabilityChain(projectId, input.deliveryId ?? null)
+    const traceChain = this.graph.getTraceabilityChain(projectId, input.deliveryId ?? null, input.flowConfig ?? null)
 
     return { upstreamDeliverables, relatedAssets, reflections, traceChain }
   }
@@ -555,5 +557,27 @@ export const knowledgeMethods = {
   /** RecallInput → StageRecall */
   'knowledge.recall': async (params: any) => {
     return getKnowledgeService().recallStageContext(params)
+  },
+
+  /**
+   * { projectId, deliveryId?, flowConfig? } → traceability chain with
+   * per-entity outgoing relations (traceability UI + rule evaluation).
+   */
+  'knowledge.trace_chain': (params: any) => {
+    const { projectId } = params ?? {}
+    if (!projectId) throw new Error('projectId is required')
+    const svc = getKnowledgeService()
+    const chain = svc.graph.getTraceabilityChain(projectId, params.deliveryId ?? null, params.flowConfig ?? null)
+    return chain.map((item) => ({
+      ...item,
+      entities: item.entities.map((e) => ({
+        ...e,
+        relations: svc.graph.getRelations(e.id).map((r) => ({
+          id: r.id,
+          relation: r.relation,
+          target: { id: r.target.id, label: r.target.label, type: r.target.type, properties: r.target.properties },
+        })),
+      })),
+    }))
   },
 }

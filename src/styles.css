@@ -3,6 +3,11 @@
    Linear-inspired clean modern style
    ======================================== */
 
+/* Tailwind 工具类（供 FlowEditor/NodeConfigPanel 使用）；
+   不引入 base/preflight，避免重置现有手写设计系统 */
+@tailwind components;
+@tailwind utilities;
+
 /* Spin animation */
 @keyframes ff-spin {
   from { transform: rotate(0deg); }

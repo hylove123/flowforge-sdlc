@@ -1,4 +1,5 @@
 pub mod code_index;
+pub mod files;
 pub mod git_ops;
 pub mod notify;
 pub mod sidecar;

@@ -3,10 +3,10 @@ import { Link } from 'react-router-dom'
 import {
   Plus, X, Trash2, Edit3, Loader2, Eye, EyeOff,
   Server, GitBranch, Folder, Search, Database, CheckCircle,
-  AlertCircle, FileCode, Zap, ChevronRight, RefreshCw,
+  AlertCircle, FileCode, Zap, ChevronRight, ChevronDown, RefreshCw,
   Code2, Terminal, BookOpen, Layers, Bot, Settings,
   SlidersHorizontal, ArrowUp, ArrowDown, GripVertical, PlusCircle, RotateCcw,
-  Cpu, Sliders, Link2, Shield,
+  Cpu, Sliders, Link2, Shield, Users, Share2,
 } from 'lucide-react'
 import { useApp } from '@/context/AppContext'
 import ConfigScopeBanner from '@/components/ConfigScopeBanner'
@@ -14,13 +14,18 @@ import { Toggle } from '@/components/ui/Toggle'
 import {
   getRepositories, addRepository, updateRepository, deleteRepository,
   cloneRepository, validateGitUrl, validateLocalPath, getRepoNameFromUrl,
-  validateLocalRepo,
+  validateLocalRepo, supportsGitOps,
+  listBranches, checkoutBranch, createBranch,
 } from '@/services/repository'
-import { detectRuntimeMode } from '@/adapters/StorageService'
 import {
   getIndexes, startIndexing, getIndexStatus, getProjectIndexStats,
-  deleteIndex, searchCodebase
+  deleteIndex, searchCodebase,
+  getCodeIndexStats,
+  watchCodeIndex, unwatchCodeIndex, onCodeIndexUpdated,
+  buildCrossRepoIntelligence, syncGraphChanges,
 } from '@/services/codebaseIndex'
+import { getGraphEngineStatus, countCrossServiceEdges, graphProjectName } from '@/services/graphEngine'
+import { getModelOptions } from '@/services/ai'
 import { STAGE_DEFINITIONS, buildDefaultFlowConfig, getProjectFlowConfig, getProjectStages } from '@/data/stages'
 
 // Local stage output type options for the custom flow editor
@@ -34,13 +39,8 @@ const STAGE_OUTPUT_TYPES = [
   { value: 'Agent', label: '智能体' },
 ]
 
-// Common model options for the model selects
-const MODEL_OPTIONS = [
-  'GPT-4o',
-  'GPT-4o-mini',
-  'Claude 3.5 Sonnet',
-  'DeepSeek V3',
-]
+// Common model options for the model selects come from the custom model registry
+// (see getModelOptions in @/services/ai) — no hardcoded model names.
 
 // stage.icon is a string (e.g. 'FileText'); map stage id -> importable lucide icon
 const STAGE_ICON_MAP = {
@@ -58,7 +58,8 @@ const STAGE_ICON_MAP = {
 const TABS = [
   { key: 'repos', label: '仓库管理', icon: GitBranch },
   { key: 'flow', label: '交付流编排', icon: Layers },
-  { key: 'index', label: '代码索引', icon: Database },
+  { key: 'index', label: '索引管理', icon: Database },
+  { key: 'members', label: '成员管理', icon: Users },
 ]
 
 const REPO_STATUS_META = {
@@ -92,7 +93,7 @@ function formatTime(iso) {
   }
 }
 
-export default function ProjectConfig() {
+export default function ProjectConfig({ embedded = false }) {
   const {
     currentProject, projects, setCurrentProject, showToast,
     stageDefinitions,
@@ -100,6 +101,7 @@ export default function ProjectConfig() {
     updateProjectFlow, updateFlowNode, resetProjectFlow, getProjectStageList,
     getFlowNode, getStageGate,
     agents, updateAgent,
+    users, updateProjectConfig,
   } = useApp()
 
   const [activeTab, setActiveTab] = useState('repos')
@@ -116,6 +118,23 @@ export default function ProjectConfig() {
   const [cloningRepoId, setCloningRepoId] = useState(null)
   // Clone progress relayed from git://clone_progress (tauri mode): { repoId, percent, line }
   const [cloneProgress, setCloneProgress] = useState(null)
+
+  // ─── Branch picker state (real git checkout via Rust commands) ───
+  const [branchPickerRepoId, setBranchPickerRepoId] = useState(null)
+  const [branchList, setBranchList] = useState(null) // {local, remote, current}
+  const [branchLoading, setBranchLoading] = useState(false)
+  const [checkingOutBranch, setCheckingOutBranch] = useState(null)
+  const [newBranchName, setNewBranchName] = useState('')
+
+  // ─── Real Rust index stats + commit watcher (merged from KnowledgeBase) ───
+  const [repoIndexStats, setRepoIndexStats] = useState({}) // repoId -> stats
+  const [watched, setWatched] = useState({}) // repoPath -> bool
+  const [rebuilding, setRebuilding] = useState(false)
+  const [idxRefreshTick, setIdxRefreshTick] = useState(0)
+
+  // ─── Member management state (migrated from Projects page) ───
+  const [showAddMember, setShowAddMember] = useState(false)
+  const [addMemberSelection, setAddMemberSelection] = useState([])
 
   // ─── Custom flow editor state ───
   const projectStages = getProjectStageList(currentProject)
@@ -200,6 +219,8 @@ export default function ProjectConfig() {
         setShowRepoDialog(false)
         setShowAddStageDialog(false)
         setShowAgentEditModal(false)
+        setShowAddMember(false)
+        setBranchPickerRepoId(null)
       }
     }
     document.addEventListener('keydown', handleKeyDown)
@@ -252,12 +273,8 @@ export default function ProjectConfig() {
     setRepoForm(prev => ({ ...prev, type }))
   }
 
-  // 原生目录选择器（tauri-plugin-dialog）；web 模式不支持引用本地目录
+  // 原生目录选择器（tauri-plugin-dialog）
   const handlePickDirectory = async () => {
-    if (detectRuntimeMode() !== 'tauri') {
-      showToast('浏览器模式不支持引用本地目录，请使用桌面版', 'info')
-      return
-    }
     let open
     try {
       ({ open } = await import('@tauri-apps/plugin-dialog'))
@@ -286,11 +303,6 @@ export default function ProjectConfig() {
       return
     }
     if (repoForm.type === 'local') {
-      // web 模式无法访问本机文件系统，明确拒绝而非假校验通过
-      if (detectRuntimeMode() !== 'tauri') {
-        showToast('浏览器模式不支持引用本地目录，请使用桌面版', 'error')
-        return
-      }
       const v = validateLocalPath(repoForm.path)
       if (!v.valid) {
         showToast(v.message, 'error')
@@ -456,7 +468,7 @@ export default function ProjectConfig() {
     setAgentEditForm({
       name: agent.name || '',
       description: agent.description || '',
-      model: agent.model || MODEL_OPTIONS[0],
+      model: agent.model || '',
       systemPrompt: agent.systemPrompt || '',
       temperature: typeof agent.temperature === 'number' ? agent.temperature : 0.7,
       skills: (agent.skills || []).join(', '),
@@ -494,8 +506,20 @@ export default function ProjectConfig() {
   const handleStartIndex = async (repo) => {
     setIndexingRepoId(repo.id)
     try {
-      await startIndexing(currentProject.id, repo.id, repo.name)
+      const updated = await startIndexing(currentProject.id, repo.id, repo.name)
       showToast(`「${repo.name}」索引完成`, 'success')
+      // 多仓库项目：所有仓库就绪后自动触发跨仓库智能（CROSS_* 边）
+      const all = getIndexes(currentProject.id)
+      const repoCount = repos.filter(r => r.path).length
+      const readyCount = all.filter(i => i.status === 'ready').length
+      if (repoCount >= 2 && readyCount >= repoCount && updated?.status === 'ready') {
+        try {
+          await buildCrossRepoIntelligence(currentProject.id)
+          showToast('所有仓库已就绪，跨仓库智能已自动建立', 'success')
+        } catch (e) {
+          showToast(`跨仓库智能建立失败：${e?.message || e}`, 'error')
+        }
+      }
     } catch (e) {
       showToast(`索引失败：${repo.name}`, 'error')
     }
@@ -526,6 +550,209 @@ export default function ProjectConfig() {
     setQaSearching(false)
   }
 
+  // ─── Branch picker handlers (real git via Rust shell) ───────────
+  const openBranchPicker = async (repo) => {
+    if (branchPickerRepoId === repo.id) {
+      setBranchPickerRepoId(null)
+      return
+    }
+    setBranchPickerRepoId(repo.id)
+    setBranchList(null)
+    setNewBranchName('')
+    setBranchLoading(true)
+    try {
+      const list = await listBranches(repo.path)
+      setBranchList(list)
+    } catch (e) {
+      showToast(`分支列表获取失败：${e?.message || e}`, 'error')
+      setBranchPickerRepoId(null)
+    }
+    setBranchLoading(false)
+  }
+
+  const handleCheckoutBranch = async (repo, branch) => {
+    if (branch === repo.branch) {
+      setBranchPickerRepoId(null)
+      return
+    }
+    setCheckingOutBranch(branch)
+    try {
+      await checkoutBranch(repo.path, branch)
+      updateRepository(repo.id, { branch })
+      refreshRepos()
+      showToast(`已切换到分支「${branch}」`, 'success')
+      setBranchPickerRepoId(null)
+    } catch (e) {
+      showToast(`切换分支失败：${e?.message || e}`, 'error')
+    }
+    setCheckingOutBranch(null)
+  }
+
+  const handleCreateBranch = async (repo) => {
+    const name = newBranchName.trim()
+    if (!name) {
+      showToast('请输入新分支名', 'info')
+      return
+    }
+    setCheckingOutBranch(`new:${name}`)
+    try {
+      await createBranch(repo.path, name, repo.branch)
+      await checkoutBranch(repo.path, name)
+      updateRepository(repo.id, { branch: name })
+      refreshRepos()
+      showToast(`已创建并切换到分支「${name}」`, 'success')
+      setBranchPickerRepoId(null)
+    } catch (e) {
+      showToast(`新建分支失败：${e?.message || e}`, 'error')
+    }
+    setCheckingOutBranch(null)
+  }
+
+  // ─── Real Rust index stats (single source of truth for the index tab) ───
+  useEffect(() => {
+    if (activeTab !== 'index' || !currentProject) return undefined
+    let cancelled = false
+    const load = async () => {
+      const withPath = getRepositories(currentProject.id).filter(r => r.path)
+      const entries = await Promise.all(withPath.map(async (repo) => {
+        try {
+          return [repo.id, await getCodeIndexStats(repo.path)]
+        } catch {
+          return [repo.id, null]
+        }
+      }))
+      if (!cancelled) setRepoIndexStats(Object.fromEntries(entries))
+    }
+    load()
+    // auto-incremental reindex (commit watcher) → refresh the stats
+    // 统一增量：同时触发引擎 B 的 detect_changes（t3）
+    const off = onCodeIndexUpdated(() => {
+      setIdxRefreshTick(t => t + 1)
+      syncGraphChanges(currentProject.id).catch(() => {})
+    })
+    return () => { cancelled = true; off() }
+  }, [activeTab, currentProject, idxRefreshTick])
+
+  // ─── 引擎 B（codebase-memory-mcp）状态 + 跨服务调用边统计（t3） ───
+  const [graphEngineStatus, setGraphEngineStatus] = useState(null)
+  const [graphEdgeStats, setGraphEdgeStats] = useState(null) // { total, byType }
+  const [crossBuilding, setCrossBuilding] = useState(false)
+
+  useEffect(() => {
+    if (activeTab !== 'index' || !currentProject) return undefined
+    let cancelled = false
+    const load = async () => {
+      const status = await getGraphEngineStatus()
+      if (cancelled) return
+      setGraphEngineStatus(status)
+      // 逐图谱就绪仓库统计 CROSS_* 边并汇总
+      const graphReady = getIndexes(currentProject.id).filter(i => i.graphStatus === 'ready')
+      const repos = getRepositories(currentProject.id)
+      const edgeResults = await Promise.all(graphReady.map(async (idx) => {
+        const repo = repos.find(r => r.id === idx.repoId)
+        const project = graphProjectName(repo || { path: idx.repoPath, name: idx.repoName })
+        return project ? countCrossServiceEdges(project, repo?.path || idx.repoPath) : null
+      }))
+      if (cancelled) return
+      const total = edgeResults.reduce((s, r) => s + (r?.total ?? 0), 0)
+      const byType = {}
+      for (const r of edgeResults) {
+        for (const [t, c] of Object.entries(r?.byType ?? {})) byType[t] = (byType[t] || 0) + c
+      }
+      setGraphEdgeStats({ total, byType })
+    }
+    load()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, currentProject, idxRefreshTick, indexes])
+
+  const handleBuildCrossRepo = async () => {
+    setCrossBuilding(true)
+    try {
+      await buildCrossRepoIntelligence(currentProject.id)
+      showToast('跨仓库智能建立完成，已生成跨服务调用边', 'success')
+      setIdxRefreshTick(t => t + 1)
+    } catch (e) {
+      showToast(`跨仓库智能建立失败：${e?.message || e}`, 'error')
+    }
+    setCrossBuilding(false)
+  }
+
+  const handleToggleWatch = async (repo) => {
+    try {
+      if (watched[repo.path]) {
+        await unwatchCodeIndex(repo.path)
+        setWatched(w => ({ ...w, [repo.path]: false }))
+        showToast('已停止增量监听', 'info')
+      } else {
+        await watchCodeIndex(repo.path)
+        setWatched(w => ({ ...w, [repo.path]: true }))
+        showToast('已开启 commit 监听，变更后自动增量索引', 'success')
+      }
+    } catch (e) {
+      showToast(`监听切换失败：${e?.message || e}`, 'error')
+    }
+  }
+
+  const handleRebuildAllIndexes = async () => {
+    const targets = repos.filter(r => r.path)
+    if (targets.length === 0) {
+      showToast('请先添加含本地路径的仓库', 'error')
+      return
+    }
+    setRebuilding(true)
+    try {
+      for (const repo of targets) {
+        // 统一入口：startIndexing 内部串行 引擎A → 引擎B
+        await startIndexing(currentProject.id, repo.id, repo.name)
+      }
+      // 多仓库项目重建完成后自动重建跨仓库智能
+      if (targets.length >= 2) {
+        try {
+          await buildCrossRepoIntelligence(currentProject.id)
+          showToast('跨仓库智能已同步重建', 'success')
+        } catch (e) {
+          showToast(`跨仓库智能重建失败：${e?.message || e}`, 'error')
+        }
+      }
+      setIdxRefreshTick(t => t + 1)
+      refreshIndexes()
+    } catch (e) {
+      showToast(`重建索引失败：${e?.message || e}`, 'error')
+    }
+    setRebuilding(false)
+  }
+
+  // CommandPalette 快捷动作「重建索引」→ 切到索引页签并触发重建
+  useEffect(() => {
+    const onRebuild = () => {
+      setActiveTab('index')
+      handleRebuildAllIndexes()
+    }
+    window.addEventListener('flowforge:rebuild-index', onRebuild)
+    return () => window.removeEventListener('flowforge:rebuild-index', onRebuild)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repos])
+
+  // ─── Member handlers (migrated from Projects page) ─────────────
+  const handleRemoveMember = (memberName, index) => {
+    const newMembers = currentProject.members.filter((_, j) => j !== index)
+    updateProjectConfig(currentProject.id, 'members', newMembers)
+    showToast(`已移除成员「${memberName}」`, 'success')
+  }
+
+  const handleAddMembers = () => {
+    if (addMemberSelection.length === 0) {
+      showToast('请至少选择一位成员', 'info')
+      return
+    }
+    const currentMembers = currentProject.members || []
+    updateProjectConfig(currentProject.id, 'members', [...currentMembers, ...addMemberSelection])
+    showToast(`已添加 ${addMemberSelection.length} 位成员`, 'success')
+    setShowAddMember(false)
+    setAddMemberSelection([])
+  }
+
   // ─── Render helpers ─────────────────────────────────────────────
   const renderBadge = (text, color, bg) => (
     <span style={{
@@ -547,13 +774,35 @@ export default function ProjectConfig() {
     ? validateLocalPath(repoForm.path.trim())
     : null
 
+  // Index tab aggregates — single source of truth: Rust `code_index_stats`.
+  // Falls back to the stored index records until the Rust stats are loaded.
+  const rustStatValues = Object.values(repoIndexStats).filter(s => s && s.exists)
+  const hasRustStats = rustStatValues.length > 0
+  const indexAggregate = hasRustStats
+    ? {
+        repoCount: rustStatValues.length,
+        totalFiles: rustStatValues.reduce((sum, s) => sum + (s.files ?? 0), 0),
+        totalSymbols: rustStatValues.reduce((sum, s) => sum + (s.symbols ?? 0), 0),
+        totalRelations: rustStatValues.reduce((sum, s) => sum + (s.relations ?? 0), 0),
+        lastIndexed: rustStatValues.map(s => s.lastIndexedAt).filter(Boolean).sort().reverse()[0] || null,
+        languages: [...new Set(rustStatValues.flatMap(s => s.languages ?? []))],
+      }
+    : {
+        repoCount: indexStats.repoCount,
+        totalFiles: indexStats.totalFiles,
+        totalSymbols: indexStats.totalChunks,
+        totalRelations: null,
+        lastIndexed: indexStats.lastIndexed,
+        languages: indexStats.languages,
+      }
+
   // ════════════════════════════════════════════════════════════════
   //  RENDER
   // ════════════════════════════════════════════════════════════════
   if (!currentProject) {
     return (
       <div className="fade-in">
-        <ConfigScopeBanner />
+        {!embedded && <ConfigScopeBanner />}
         <div className="card" style={{ padding: '40px', textAlign: 'center', color: 'var(--fg-tertiary)' }}>
           请先选择一个项目
         </div>
@@ -563,37 +812,40 @@ export default function ProjectConfig() {
 
   return (
     <div className="fade-in">
-      <ConfigScopeBanner />
+      {!embedded && <ConfigScopeBanner />}
 
-      {/* Header with project selector */}
-      <div className="page-header">
-        <div>
-          <h2>项目配置中心</h2>
-          <p style={{ fontSize: '13px', color: 'var(--fg-tertiary)', marginTop: '4px' }}>
-            统一管理项目仓库、交付流编排和代码索引
-          </p>
+      {/* Header with project selector (standalone page only; embedded mode is
+          scoped by the project list of the project center) */}
+      {!embedded && (
+        <div className="page-header">
+          <div>
+            <h2>项目配置中心</h2>
+            <p style={{ fontSize: '13px', color: 'var(--fg-tertiary)', marginTop: '4px' }}>
+              统一管理项目仓库、交付流编排和代码索引
+            </p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <label htmlFor="project-select" style={{ fontSize: '12px', color: 'var(--fg-tertiary)' }}>当前项目</label>
+            <select
+              id="project-select"
+              className="select"
+              style={{ minWidth: '200px' }}
+              value={currentProject.id}
+              onChange={(e) => {
+                const proj = projects.find(p => p.id === e.target.value)
+                if (proj) {
+                  setCurrentProject(proj)
+                }
+              }}
+              aria-label="切换项目"
+            >
+              {projects.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <label htmlFor="project-select" style={{ fontSize: '12px', color: 'var(--fg-tertiary)' }}>当前项目</label>
-          <select
-            id="project-select"
-            className="select"
-            style={{ minWidth: '200px' }}
-            value={currentProject.id}
-            onChange={(e) => {
-              const proj = projects.find(p => p.id === e.target.value)
-              if (proj) {
-                setCurrentProject(proj)
-              }
-            }}
-            aria-label="切换项目"
-          >
-            {projects.map(p => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-        </div>
-      </div>
+      )}
 
       {/* Tabs */}
       <div className="tabs">
@@ -705,9 +957,28 @@ export default function ProjectConfig() {
                             {isGit ? (repo.gitUrl || '—') : (repo.path || '—')}
                           </code>
                         </span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <GitBranch size={11} /> {repo.branch || 'main'}
-                        </span>
+                        {repo.status === 'ready' && repo.path && supportsGitOps(repo) ? (
+                          <button
+                            className="btn btn-ghost"
+                            style={{
+                              display: 'inline-flex', alignItems: 'center', gap: '4px',
+                              padding: '2px 8px', fontSize: '12px',
+                              fontFamily: 'JetBrains Mono, monospace',
+                            }}
+                            onClick={(e) => { e.stopPropagation(); openBranchPicker(repo) }}
+                            aria-haspopup="menu"
+                            aria-expanded={branchPickerRepoId === repo.id}
+                            aria-label={`切换 ${repo.name} 的分支`}
+                            title="切换分支"
+                          >
+                            <GitBranch size={11} /> {repo.branch || 'main'}
+                            {branchPickerRepoId === repo.id ? <ChevronDown size={10} style={{ transform: 'rotate(180deg)' }} /> : <ChevronDown size={10} />}
+                          </button>
+                        ) : (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <GitBranch size={11} /> {repo.branch || 'main'}
+                          </span>
+                        )}
                         {repo.lastSync && (
                           <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <RefreshCw size={11} /> {formatTime(repo.lastSync)}
@@ -752,6 +1023,84 @@ export default function ProjectConfig() {
                         }}>
                           <AlertCircle size={11} style={{ flexShrink: 0 }} />
                           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{repo.error}</span>
+                        </div>
+                      )}
+
+                      {/* Branch picker dropdown (real git checkout) */}
+                      {branchPickerRepoId === repo.id && (
+                        <div
+                          role="menu"
+                          aria-label={`${repo.name} 分支列表`}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            marginTop: '10px', padding: '10px', borderRadius: '8px',
+                            background: 'var(--surface)', border: '1px solid var(--border)',
+                            boxShadow: '0 6px 20px rgba(0,0,0,0.08)', maxWidth: '420px',
+                          }}
+                        >
+                          {branchLoading ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--fg-tertiary)', padding: '6px 4px' }}>
+                              <Loader2 size={12} className="ff-spin" /> 加载分支列表…
+                            </div>
+                          ) : branchList ? (
+                            <div style={{ maxHeight: '220px', overflowY: 'auto' }}>
+                              {[{ label: '本地分支', items: branchList.local || [] }, { label: '远程分支', items: branchList.remote || [] }].map(group => (
+                                group.items.length > 0 && (
+                                  <div key={group.label} style={{ marginBottom: '8px' }}>
+                                    <div style={{ fontSize: '10px', fontWeight: 510, color: 'var(--fg-muted)', padding: '2px 6px' }}>{group.label}</div>
+                                    {group.items.map(b => {
+                                      const isCurrent = b === branchList.current || b === repo.branch
+                                      const busy = checkingOutBranch === b
+                                      return (
+                                        <button
+                                          key={b}
+                                          role="menuitem"
+                                          className="btn btn-ghost"
+                                          disabled={busy || checkingOutBranch !== null}
+                                          onClick={() => handleCheckoutBranch(repo, b)}
+                                          style={{
+                                            display: 'flex', alignItems: 'center', gap: '6px', width: '100%',
+                                            justifyContent: 'flex-start', fontSize: '12px', padding: '5px 8px',
+                                            fontFamily: 'JetBrains Mono, monospace',
+                                            color: isCurrent ? 'var(--accent)' : 'var(--fg-secondary)',
+                                            fontWeight: isCurrent ? 510 : 400,
+                                          }}
+                                        >
+                                          {busy ? <Loader2 size={11} className="ff-spin" /> : <GitBranch size={11} />}
+                                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b}</span>
+                                          {isCurrent && <span style={{ fontSize: '10px', color: 'var(--accent)', marginLeft: 'auto', flexShrink: 0 }}>当前</span>}
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+                                )
+                              ))}
+                              {(branchList.local || []).length === 0 && (branchList.remote || []).length === 0 && (
+                                <div style={{ fontSize: '12px', color: 'var(--fg-muted)', padding: '6px 4px' }}>未发现分支</div>
+                              )}
+                            </div>
+                          ) : null}
+                          {/* New branch entry */}
+                          <div style={{ display: 'flex', gap: '6px', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid var(--border-subtle)' }}>
+                            <input
+                              className="input"
+                              value={newBranchName}
+                              onChange={(e) => setNewBranchName(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') handleCreateBranch(repo) }}
+                              placeholder="新分支名，如 feature/xxx"
+                              style={{ flex: 1, fontSize: '12px', padding: '5px 8px', fontFamily: 'JetBrains Mono, monospace' }}
+                              aria-label="新分支名"
+                            />
+                            <button
+                              className="btn btn-secondary"
+                              style={{ fontSize: '12px', padding: '5px 10px', flexShrink: 0 }}
+                              disabled={checkingOutBranch !== null}
+                              onClick={() => handleCreateBranch(repo)}
+                            >
+                              {checkingOutBranch?.startsWith('new:') ? <Loader2 size={12} className="ff-spin" /> : <Plus size={12} />}
+                              新建并切换
+                            </button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1033,16 +1382,29 @@ export default function ProjectConfig() {
         </div>
       )}
 
-      {/* ════════ Tab 3: 代码索引 ════════ */}
+      {/* ════════ Tab 3: 索引管理 ════════ */}
       {activeTab === 'index' && (
         <div>
-          {/* Overall stats */}
+          {/* Overall stats + rebuild (data source: Rust code_index_stats) */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+            <div style={{ fontSize: '14px', fontWeight: 510, color: 'var(--fg)' }}>
+              索引总览
+              <span style={{ color: 'var(--fg-muted)', fontWeight: 400, fontSize: '12px', marginLeft: '6px' }}>
+                {hasRustStats ? 'tree-sitter 真实索引统计' : '本地索引记录'}
+              </span>
+            </div>
+            <button className="btn btn-secondary" style={{ fontSize: '12px' }} onClick={handleRebuildAllIndexes} disabled={rebuilding}>
+              {rebuilding ? <Loader2 size={12} className="ff-spin" /> : <RefreshCw size={12} />}
+              {rebuilding ? '重建中…' : '重建全部索引'}
+            </button>
+          </div>
           <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>
             {[
-              { label: '已索引仓库', value: indexStats.repoCount, icon: Database, color: 'var(--accent)' },
-              { label: '总文件数', value: indexStats.totalFiles.toLocaleString(), icon: FileCode, color: 'var(--color-progress)' },
-              { label: '总分块数', value: indexStats.totalChunks.toLocaleString(), icon: Layers, color: 'var(--color-ai-review)' },
-              { label: '最近索引', value: formatTime(indexStats.lastIndexed), icon: RefreshCw, color: 'var(--color-success)' },
+              { label: '已索引仓库', value: indexAggregate.repoCount, icon: Database, color: 'var(--accent)' },
+              { label: '总文件数', value: indexAggregate.totalFiles.toLocaleString(), icon: FileCode, color: 'var(--color-progress)' },
+              { label: '总符号数', value: indexAggregate.totalSymbols.toLocaleString(), icon: Layers, color: 'var(--color-ai-review)' },
+              { label: '总关系数', value: indexAggregate.totalRelations == null ? '—' : indexAggregate.totalRelations.toLocaleString(), icon: GitBranch, color: 'var(--fg-secondary)' },
+              { label: '最近索引', value: formatTime(indexAggregate.lastIndexed), icon: RefreshCw, color: 'var(--color-success)' },
             ].map(stat => (
               <div key={stat.label} className="card" style={{ flex: '1 1 180px', padding: '16px 18px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
@@ -1061,14 +1423,14 @@ export default function ProjectConfig() {
           </div>
 
           {/* Languages */}
-          {indexStats.languages.length > 0 && (
+          {indexAggregate.languages.length > 0 && (
             <div style={{
               padding: '12px 16px', marginBottom: '20px', borderRadius: '8px',
               background: 'var(--surface)', border: '1px solid var(--border-subtle)',
               display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap',
             }}>
               <span style={{ fontSize: '12px', color: 'var(--fg-tertiary)' }}>检测到的语言：</span>
-              {indexStats.languages.map(lang => (
+              {indexAggregate.languages.map(lang => (
                 <span key={lang} style={{
                   fontSize: '11px', fontWeight: 510, color: 'var(--fg-secondary)',
                   padding: '2px 8px', borderRadius: '6px', background: 'var(--bg)', border: '1px solid var(--border-subtle)',
@@ -1078,6 +1440,41 @@ export default function ProjectConfig() {
               ))}
             </div>
           )}
+
+          {/* 项目知识图谱（引擎 B：codebase-memory-mcp，t3） */}
+          <div className="card" style={{ padding: '16px 20px', marginBottom: '20px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
+              <Share2 size={16} style={{ color: 'var(--color-ai-review)' }} />
+              <span style={{ fontSize: '14px', fontWeight: 510 }}>项目知识图谱</span>
+              <span style={{ fontSize: '11px', color: 'var(--fg-muted)' }}>引擎 B · codebase-memory-mcp（调用图/跨服务调用识别）</span>
+              {graphEngineStatus && (
+                renderBadge(
+                  graphEngineStatus.available ? '引擎就绪' : '引擎未就绪',
+                  graphEngineStatus.available ? 'var(--color-success)' : 'var(--fg-muted)',
+                  graphEngineStatus.available ? 'color-mix(in srgb, var(--color-success) 10%, transparent)' : 'var(--surface)'
+                )
+              )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+              <div style={{ fontSize: '12px', color: 'var(--fg-tertiary)', flex: 1, minWidth: '240px', lineHeight: 1.7 }}>
+                {graphEngineStatus?.available
+                  ? `双引擎进度：${indexes.filter(i => i.graphStatus === 'ready').length}/${indexes.filter(i => i.status === 'ready').length} 个就绪仓库已建图谱 · 跨服务调用边 ${graphEdgeStats?.total ?? 0} 条${graphEdgeStats?.byType?.CROSS_HTTP_CALLS ? `（HTTP ${graphEdgeStats.byType.CROSS_HTTP_CALLS}）` : ''}`
+                  : graphEngineStatus?.error
+                    ? `图谱引擎不可用，搜索已自动降级仅用引擎 A：${graphEngineStatus.error}`
+                    : '正在探测图谱引擎状态…'}
+              </div>
+              <button
+                className="btn btn-secondary"
+                style={{ fontSize: '12px' }}
+                onClick={handleBuildCrossRepo}
+                disabled={crossBuilding || indexes.filter(i => i.graphStatus === 'ready').length === 0}
+                title="cross-repo-intelligence：匹配 Route/Channel 生成 CROSS_HTTP_CALLS / CROSS_ASYNC_CALLS / CROSS_CHANNEL 边"
+              >
+                {crossBuilding ? <Loader2 size={12} className="ff-spin" /> : <Share2 size={12} />}
+                {crossBuilding ? '建立中…' : '一键建立跨仓库智能'}
+              </button>
+            </div>
+          </div>
 
           {/* Repo index list */}
           <div style={{ fontSize: '14px', fontWeight: 510, color: 'var(--fg)', marginBottom: '14px' }}>
@@ -1101,6 +1498,7 @@ export default function ProjectConfig() {
                 const idxStatus = getIndexStatus(repo.id)
                 const isIndexing = indexingRepoId === repo.id
                 const isReady = idxStatus.status === 'ready'
+                const rustStats = repoIndexStats[repo.id]
                 return (
                   <div key={repo.id} className="card" style={{ padding: '16px 20px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
@@ -1116,6 +1514,10 @@ export default function ProjectConfig() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
                           <span style={{ fontSize: '14px', fontWeight: 590, color: 'var(--fg)' }}>{repo.name}</span>
                           {renderBadge(idxStatus.label, idxStatus.color)}
+                          {/* 引擎 B 图谱状态徽章（t3 双引擎） */}
+                          {index?.graphStatus === 'indexing' && renderBadge('图谱索引中', 'var(--color-progress)', 'color-mix(in srgb, var(--color-progress) 10%, transparent)')}
+                          {index?.graphStatus === 'ready' && renderBadge('图谱就绪', 'var(--color-ai-review)', 'color-mix(in srgb, var(--color-ai-review) 10%, transparent)')}
+                          {index?.graphStatus === 'error' && renderBadge('图谱失败', 'var(--color-error)', 'color-mix(in srgb, var(--color-error) 10%, transparent)')}
                           {repo.isMain && renderBadge('主仓库', 'var(--accent)', 'color-mix(in srgb, var(--accent) 10%, transparent)')}
                         </div>
                         <div style={{ fontSize: '12px', color: 'var(--fg-tertiary)' }}>
@@ -1123,6 +1525,17 @@ export default function ProjectConfig() {
                         </div>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                        {repo.path && (
+                          <button
+                            className={`btn ${watched[repo.path] ? 'btn-primary' : 'btn-secondary'}`}
+                            style={{ fontSize: '12px' }}
+                            onClick={() => handleToggleWatch(repo)}
+                            aria-label={`${watched[repo.path] ? '停止' : '开启'} ${repo.name} 增量监听`}
+                            title="commit 变更后自动增量索引"
+                          >
+                            <Zap size={12} /> {watched[repo.path] ? '监听中' : '增量监听'}
+                          </button>
+                        )}
                         <button
                           className="btn btn-secondary"
                           style={{ fontSize: '12px' }}
@@ -1147,8 +1560,31 @@ export default function ProjectConfig() {
                       </div>
                     </div>
 
-                    {/* Index detail */}
-                    {isReady && index && (
+                    {/* Index detail — real Rust stats preferred, stored record as fallback */}
+                    {rustStats?.exists ? (
+                      <div style={{
+                        marginTop: '14px', paddingTop: '14px', borderTop: '1px solid var(--border-subtle)',
+                        display: 'flex', flexWrap: 'wrap', gap: '20px', fontSize: '12px', color: 'var(--fg-tertiary)',
+                      }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <FileCode size={12} /> 文件：<strong style={{ color: 'var(--fg-secondary)' }}>{(rustStats.files ?? 0).toLocaleString()}</strong>
+                        </span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <Layers size={12} /> 符号：<strong style={{ color: 'var(--fg-secondary)' }}>{(rustStats.symbols ?? 0).toLocaleString()}</strong>
+                        </span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <GitBranch size={12} /> 关系：<strong style={{ color: 'var(--fg-secondary)' }}>{(rustStats.relations ?? 0).toLocaleString()}</strong>
+                        </span>
+                        {(rustStats.languages ?? []).length > 0 && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                            <Code2 size={12} /> 语言：<strong style={{ color: 'var(--fg-secondary)' }}>{rustStats.languages.join(', ')}</strong>
+                          </span>
+                        )}
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <RefreshCw size={12} /> 索引时间：<strong style={{ color: 'var(--fg-secondary)' }}>{formatTime(rustStats.lastIndexedAt)}</strong>
+                        </span>
+                      </div>
+                    ) : isReady && index ? (
                       <div style={{
                         marginTop: '14px', paddingTop: '14px', borderTop: '1px solid var(--border-subtle)',
                         display: 'flex', flexWrap: 'wrap', gap: '20px', fontSize: '12px', color: 'var(--fg-tertiary)',
@@ -1166,7 +1602,7 @@ export default function ProjectConfig() {
                           <RefreshCw size={12} /> 索引时间：<strong style={{ color: 'var(--fg-secondary)' }}>{formatTime(index.lastIndexed)}</strong>
                         </span>
                       </div>
-                    )}
+                    ) : null}
 
                     {/* Prompt to index */}
                     {!isReady && !isIndexing && (
@@ -1262,6 +1698,53 @@ export default function ProjectConfig() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ════════ Tab 4: 成员管理 ════════ */}
+      {activeTab === 'members' && (
+        <div className="card">
+          <div className="card-header">
+            <h4 className="card-title">
+              <Users size={16} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+              项目成员 <span style={{ color: 'var(--fg-muted)', fontWeight: 400, fontSize: '12px', marginLeft: '4px' }}>{(currentProject.members || []).length} 位</span>
+            </h4>
+            <button className="btn btn-secondary" style={{ fontSize: '12px' }}
+              onClick={() => { setAddMemberSelection([]); setShowAddMember(true) }}
+              aria-haspopup="dialog">
+              <Plus size={12} /> 添加成员
+            </button>
+          </div>
+          {(currentProject.members || []).length === 0 ? (
+            <div style={{ padding: '40px 24px', textAlign: 'center', color: 'var(--fg-tertiary)', fontSize: '13px' }}>
+              暂无成员，点击「添加成员」邀请团队成员加入项目
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+              {(currentProject.members || []).map((memberName, i) => {
+                const user = users.find(u => u.name === memberName)
+                return (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: '6px' }}>
+                    <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: 'var(--surface)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 510 }}>
+                      {user ? user.avatarInitial : memberName.charAt(0)}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 510, fontSize: '13px' }}>{memberName}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--fg-tertiary)' }}>{user ? user.role : '外部成员'}</div>
+                    </div>
+                    {(currentProject.members || []).length > 1 && (
+                      <button style={{ marginLeft: '4px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)', padding: '2px' }}
+                        onClick={() => handleRemoveMember(memberName, i)}
+                        aria-label={`移除 ${memberName}`}
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -1372,11 +1855,6 @@ export default function ProjectConfig() {
                   <div style={{ fontSize: '11px', color: 'var(--fg-muted)', marginTop: '4px' }}>
                     直接引用本机已有项目（不 clone、不复制）；非 Git 目录也可引用，交付时自动跳过分支隔离
                   </div>
-                  {detectRuntimeMode() !== 'tauri' && (
-                    <div style={{ fontSize: '11px', color: 'var(--color-error)', marginTop: '4px' }}>
-                      浏览器模式不支持引用本地目录，请使用桌面版
-                    </div>
-                  )}
                 </div>
               )}
 
@@ -1486,7 +1964,6 @@ export default function ProjectConfig() {
               <button
                 className="btn btn-primary"
                 onClick={handleSaveRepo}
-                disabled={repoForm.type === 'local' && detectRuntimeMode() !== 'tauri'}
               >
                 {editingRepoId ? '保存' : '添加'}
               </button>
@@ -1570,8 +2047,9 @@ export default function ProjectConfig() {
                       style={{ width: '100%' }}
                       aria-label="模型"
                     >
-                      {MODEL_OPTIONS.map(m => (
-                        <option key={m} value={m}>{m}</option>
+                      <option value="">使用默认模型</option>
+                      {getModelOptions().map(m => (
+                        <option key={m.value} value={m.value}>{m.label}</option>
                       ))}
                     </select>
                   </div>
@@ -1754,6 +2232,82 @@ export default function ProjectConfig() {
                 取消
               </button>
               <button className="btn btn-primary" onClick={addStageToFlow}>
+                添加
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ════════ Add Member Dialog ════════ */}
+      {showAddMember && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100
+        }} onClick={() => { setShowAddMember(false); setAddMemberSelection([]) }} role="presentation">
+          <div style={{
+            background: 'var(--bg)', borderRadius: '12px', padding: '24px',
+            width: '480px', maxWidth: '90vw', maxHeight: '85vh', overflowY: 'auto',
+            border: '1px solid var(--border)', boxShadow: '0 8px 32px rgba(0,0,0,0.12)'
+          }} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="add-member-title">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h3 id="add-member-title">添加项目成员</h3>
+              <button className="btn btn-ghost" onClick={() => { setShowAddMember(false); setAddMemberSelection([]) }} aria-label="关闭对话框">
+                <X size={18} />
+              </button>
+            </div>
+            <p style={{ fontSize: '12px', color: 'var(--fg-tertiary)', marginBottom: '16px' }}>
+              选择要添加到项目「{currentProject.name}」的成员
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '24px' }}>
+              {users.filter(u => !(currentProject.members || []).includes(u.name)).length === 0 && (
+                <div style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: '24px', fontSize: '13px' }}>
+                  所有团队成员已在项目中
+                </div>
+              )}
+              {users.filter(u => !(currentProject.members || []).includes(u.name)).map(user => (
+                <label
+                  key={user.id}
+                  htmlFor={`add-member-${user.id}`}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px',
+                    border: '1px solid var(--border)', borderRadius: '6px', cursor: 'pointer',
+                    fontSize: '13px',
+                    background: addMemberSelection.includes(user.name) ? 'color-mix(in srgb, var(--accent) 6%, var(--bg))' : 'transparent',
+                    borderColor: addMemberSelection.includes(user.name) ? 'var(--accent)' : 'var(--border)',
+                  }}>
+                  <input
+                    type="checkbox"
+                    id={`add-member-${user.id}`}
+                    checked={addMemberSelection.includes(user.name)}
+                    onChange={() => {
+                      setAddMemberSelection(prev =>
+                        prev.includes(user.name)
+                          ? prev.filter(n => n !== user.name)
+                          : [...prev, user.name]
+                      )
+                    }} />
+                  <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: 'var(--surface)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 510 }}>
+                    {user.avatarInitial}
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 510 }}>{user.name}</div>
+                    <div style={{ fontSize: '11px', color: 'var(--fg-tertiary)' }}>{user.role}</div>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => { setShowAddMember(false); setAddMemberSelection([]) }}
+              >
+                取消
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleAddMembers}
+              >
                 添加
               </button>
             </div>

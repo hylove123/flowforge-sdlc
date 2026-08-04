@@ -2,8 +2,9 @@
  * DelegatePanel — three execution modes for a pipeline stage (Phase 4)
  *
  *   builtin  内置 AI   → existing LangGraph run (handled by the parent)
- *   delegate 外派      → context package → clipboard + URI scheme launch →
- *                        wait for files in the recycle dir (delegate://received)
+ *   delegate 外派      → context package → written to {repo}/.flowforge/delegate-context.md
+ *                        + local AI client (Qoder/Trae/Cursor) opened with the file
+ *                        → produce in the tool → watch recycle dir or multi-file import
  *                        → preview → confirm import
  *   manual   手动导入   → paste text / pick a file → import
  *
@@ -21,12 +22,14 @@ import {
 } from 'lucide-react'
 import { invoke as tauriInvoke } from '@tauri-apps/api/core'
 import { listen as tauriListen } from '@tauri-apps/api/event'
+import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
+import { readTextFile } from '@tauri-apps/plugin-fs'
+import { getRepositories } from '@/services/repository'
 
 const TARGET_TOOLS = [
-  { id: 'clipboard', label: '仅剪贴板', uri: '' },
-  { id: 'qoderwork', label: 'QoderWork', uri: 'qoderwork://open' },
-  { id: 'cursor', label: 'Cursor', uri: 'cursor://' },
-  { id: 'vscode', label: 'VS Code', uri: 'vscode://' },
+  { id: 'qoder', label: 'Qoder' },
+  { id: 'trae', label: 'Trae' },
+  { id: 'cursor', label: 'Cursor' },
 ]
 
 const MODES = [
@@ -49,7 +52,7 @@ export default function DelegatePanel({
   showToast,
 }) {
   const [mode, setMode] = useState('builtin')
-  const [target, setTarget] = useState('clipboard')
+  const [target, setTarget] = useState('qoder')
   const [busy, setBusy] = useState(false)
   // { delegationId, watchDir, status: 'waiting'|'received'|'timeout', files }
   const [delegation, setDelegation] = useState(null)
@@ -111,8 +114,13 @@ export default function DelegatePanel({
     return res?.threadId
   }
 
-  // ─── delegate: dispatch (context → clipboard + URI, then watch) ───
+  // ─── delegate: dispatch (context → 写入项目 + 打开本地 AI 客户端，then watch) ───
   const handleDispatch = async () => {
+    const repoPath = getRepositories(project.id).find(r => r.path)?.path || null
+    if (!repoPath) {
+      showToast('项目未配置本地仓库路径，无法外派，请先在项目中心添加仓库', 'error')
+      return
+    }
     setBusy(true)
     try {
       // structured context package assembled by the sidecar context engine
@@ -123,28 +131,61 @@ export default function DelegatePanel({
         projectName: project.name,
         requirement: delivery.description || delivery.title,
         deliverables: upstreamDeliverables,
+        repoPath,
       })
       const context = pack?.markdown
         || `# 上下文包\n\n（内容过大，已落盘：${pack?.filePath || '未知路径'}）`
 
       await ensureThread('delegate')
 
-      const uri = TARGET_TOOLS.find(t => t.id === target)?.uri || ''
+      // Rust 侧将上下文写入 {repo}/.flowforge/delegate-context.md 并打开工具
       const res = await tauriInvoke('delegate_dispatch', {
-        payload: { context, targetUri: uri || null },
+        payload: { context, toolId: target, repoPath },
       })
       setDelegation({ delegationId: res.delegationId, watchDir: res.watchDir, status: 'waiting', files: [] })
       setPreview(null)
-      showToast(
-        uri
-          ? '上下文已复制到剪贴板，已尝试唤起外部工具'
-          : '上下文已复制到剪贴板，请粘贴给外部工具处理',
-        'success'
-      )
+      const toolLabel = TARGET_TOOLS.find(t => t.id === target)?.label || target
+      showToast(`已打开 ${toolLabel} 并带入上下文，产出后请导入交付物或放入回收目录`, 'success')
     } catch (e) {
-      showToast(`外派派发失败：${e?.message || e}`, 'error')
+      showToast(`外派失败：${e?.message || e}`, 'error')
     } finally {
       setBusy(false)
+    }
+  }
+
+  // ─── 多文件导入交付物：在其它工具产出后选择多个文件导入 ───
+  const handleImportFiles = async () => {
+    try {
+      const selected = await openFileDialog({
+        multiple: true,
+        title: '选择交付物文件',
+        filters: [
+          { name: '文档', extensions: ['md', 'markdown', 'txt', 'json', 'yaml', 'yml', 'ts', 'js', 'tsx', 'jsx', 'py', 'java', 'go', 'rs'] },
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      })
+      if (!selected) return
+      const paths = Array.isArray(selected) ? selected : [selected]
+      if (paths.length === 0) return
+
+      const files = await Promise.all(
+        paths.map(async p => ({
+          name: p.split('/').pop(),
+          path: p,
+          content: await readTextFile(p),
+        }))
+      )
+      const failed = files.filter(f => typeof f.content !== 'string')
+      if (failed.length > 0) {
+        showToast(`以下文件无法读取为文本：${failed.map(f => f.name).join('、')}`, 'error')
+        return
+      }
+      const combined = files.length === 1
+        ? files[0].content
+        : files.map(f => `## 文件: ${f.name}\n\n${f.content}`).join('\n\n---\n\n')
+      await importContent(combined, 'delegate-import')
+    } catch (e) {
+      showToast(`导入交付物失败：${e?.message || e}`, 'error')
     }
   }
 
@@ -281,14 +322,17 @@ export default function DelegatePanel({
       {/* delegate */}
       {mode === 'delegate' && !delegation && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          <span style={{ color: 'var(--fg-tertiary)' }}>目标工具：</span>
+          <span style={{ color: 'var(--fg-tertiary)' }}>外派工具：</span>
           <select className="select" value={target} onChange={e => setTarget(e.target.value)} style={{ width: 'auto', fontSize: '12px', padding: '4px 6px' }}>
             {TARGET_TOOLS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
           </select>
           <button className="btn btn-primary" style={btnSm} onClick={handleDispatch} disabled={busy}>
             {busy ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} 派发
           </button>
-          <span style={{ color: 'var(--fg-muted)', fontSize: '11px' }}>上下文包将复制到剪贴板，产出文件放回回收目录即自动回收</span>
+          <button className="btn btn-secondary" style={btnSm} onClick={handleImportFiles} disabled={busy}>
+            <FileUp size={12} /> 导入交付物
+          </button>
+          <span style={{ color: 'var(--fg-muted)', fontSize: '11px' }}>将打开所选 AI 客户端并带入上下文；产出可多文件导入或放入回收目录自动回收</span>
         </div>
       )}
 
@@ -326,6 +370,13 @@ export default function DelegatePanel({
                   <CheckCircle2 size={12} /> 确认导入
                 </button>
               </div>
+            </div>
+          )}
+          {delegation.status === 'waiting' && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button className="btn btn-secondary" style={btnSm} onClick={handleImportFiles} disabled={busy}>
+                <FileUp size={12} /> 导入交付物
+              </button>
             </div>
           )}
         </div>

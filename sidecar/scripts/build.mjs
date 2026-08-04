@@ -30,6 +30,7 @@ import { build } from 'esbuild'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execFileSync } from 'node:child_process'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const dist = path.join(root, 'dist')
@@ -136,5 +137,26 @@ if (!fs.existsSync(sanity)) {
   throw new Error(`bundle layout broken: ${sanity} missing`)
 }
 
+// ─── 4. ship the graph engine binary (codebase-memory-mcp) ─────
+// Engine B of the dual-index ships as a native binary fetched from
+// GitHub Releases at install time. The packaged app has no npx/npm,
+// so the platform binary is copied next to the bundle and spawned
+// directly by graphEngine.ts (dist/graph-engine/<bin>).
+const cbmDir = path.join(nodeModules, 'codebase-memory-mcp')
+const engineBinName = process.platform === 'win32' ? 'codebase-memory-mcp.exe' : 'codebase-memory-mcp'
+const engineBinSrc = path.join(cbmDir, 'bin', engineBinName)
+if (!fs.existsSync(engineBinSrc)) {
+  // postinstall download did not run (or failed) — trigger it now
+  execFileSync(process.execPath, [path.join(cbmDir, 'install.js')], { stdio: 'inherit' })
+}
+if (!fs.existsSync(engineBinSrc)) {
+  throw new Error(`graph engine binary missing: ${engineBinSrc} — run \`node node_modules/codebase-memory-mcp/install.js\` manually`)
+}
+const engineBinDestDir = path.join(dist, 'graph-engine')
+fs.mkdirSync(engineBinDestDir, { recursive: true })
+fs.copyFileSync(engineBinSrc, path.join(engineBinDestDir, engineBinName))
+fs.chmodSync(path.join(engineBinDestDir, engineBinName), 0o755)
+
 const bundleKb = Math.round(fs.statSync(path.join(dist, 'index.js')).size / 1024)
-console.log(`[sidecar build] bundle dist/index.js (${bundleKb} KB), natives: ${[...shipped].join(', ')}`)
+const engineMb = Math.round(fs.statSync(path.join(engineBinDestDir, engineBinName)).size / 1024 / 1024)
+console.log(`[sidecar build] bundle dist/index.js (${bundleKb} KB), natives: ${[...shipped].join(', ')}, graph engine: ${engineBinName} (${engineMb} MB)`)

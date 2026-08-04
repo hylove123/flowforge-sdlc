@@ -16,9 +16,11 @@ import { STAGE_DEFINITIONS } from './domain/stages.js'
 import { contextMethods } from './domain/contextEngine.js'
 import { flywheelMethods, configureFlywheel } from './domain/flywheel.js'
 import { graphMethods, configureGraphRuntime } from './graph/runtime.js'
+import { graphEngineMethods } from './graph/graphEngine.js'
 import { knowledgeMethods, configureKnowledge } from './knowledge/knowledgeService.js'
 import { codeSearchMethods } from './knowledge/codeSearch.js'
 import { toolsMethods } from './tools/toolRegistry.js'
+import { llmMethods } from './services/llm.js'
 
 // ─── JSON-RPC plumbing ──────────────────────────────────────────
 
@@ -81,6 +83,9 @@ const methods: Record<string, MethodHandler> = {
   // graph.start_delivery / graph.continue / graph.get_state / graph.abort
   ...graphMethods,
 
+  // graph_engine.* — codebase-memory-mcp 图谱引擎（双引擎索引 B，t3）
+  ...graphEngineMethods,
+
   // knowledge.search / knowledge.stats / knowledge.register / knowledge.recall
   ...knowledgeMethods,
 
@@ -89,6 +94,9 @@ const methods: Record<string, MethodHandler> = {
 
   // tools.list_servers / tools.connect_test / tools.call (MCP, Phase 4)
   ...toolsMethods,
+
+  // llm.connect_test (模型连接测试，规避渲染进程 CORS)
+  ...llmMethods,
 
   // context.build_package (context engine, Phase 4)
   ...contextMethods,

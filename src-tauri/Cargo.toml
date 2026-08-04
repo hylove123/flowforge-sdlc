@@ -31,6 +31,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io
 notify = "8"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-opener = "2"
+# 自动更新：签名校验 + 下载 + 安装重启（tauri build 时由 TAURI_SIGNING_PRIVATE_KEY 签名产物）
+tauri-plugin-updater = "2"
 # Phase 5 code intelligence: tree-sitter parsing + SQLite FTS5 BM25 index + git incremental.
 # rusqlite is pinned to 0.32 so its libsqlite3-sys (0.30.x) unifies with the one
 # already in the graph via tauri-plugin-sql/sqlx (libsqlite3-sys has links="sqlite3").
@@ -45,8 +47,15 @@ ignore = "0.4"
 rayon = "1.10"
 lru = "0.12"
 # local-only git ops (status/log/diff) — default features off to skip openssl/ssh
-git2 = { version = "0.20", default-features = false }
+# git2 (bundled libgit2, network-capable): clone/push/branch over
+# https with token credentials — no system git dependency. ssh feature
+# intentionally off (libssh2 would drag in openssl); https-only tokens
+# are the supported auth path. On macOS the TLS backend is
+# SecureTransport, so no openssl is required.
+git2 = { version = "0.20", default-features = false, features = ["https"] }
 # Phase 6 体验打磨: system notifications (notify_user command)
 tauri-plugin-notification = "2"
 # 本地项目引用：原生目录选择器（validate_local_repo 配套入口）
 tauri-plugin-dialog = "2"
+# 外派交付物多文件导入：readTextFile 读取用户选择的任意路径文件
+tauri-plugin-fs = "2"

@@ -12,7 +12,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Search, LayoutDashboard, FolderKanban, GitBranch, Bot, BookOpen,
-  Cpu, Settings2, Workflow, Settings, FilePlus2, RefreshCw, BookMarked,
+  Cpu, Workflow, Settings, FilePlus2, RefreshCw, BookMarked,
 } from 'lucide-react'
 import { useApp } from '@/context/AppContext'
 import { useSidecar } from '@/context/SidecarContext'
@@ -25,7 +25,6 @@ const ROUTE_COMMANDS = [
   { id: 'nav-agents', label: '智能体', keywords: 'agents ai 机器人', path: '/agents', icon: Bot },
   { id: 'nav-knowledge', label: '知识库', keywords: 'knowledge 图谱 索引', path: '/knowledge', icon: BookOpen },
   { id: 'nav-models', label: '模型配置', keywords: 'models llm 模型', path: '/models', icon: Cpu },
-  { id: 'nav-project-config', label: '项目配置', keywords: 'project config 仓库', path: '/project-config', icon: Settings2 },
   { id: 'nav-flow-editor', label: '流程编辑器', keywords: 'flow editor dag 编排', path: '/flow-editor', icon: Workflow },
   { id: 'nav-settings', label: '设置', keywords: 'settings 偏好', path: '/settings', icon: Settings },
 ]
@@ -59,7 +58,7 @@ export default function CommandPalette() {
       id: 'act-rebuild-index', label: '重建索引', keywords: 'rebuild index 代码索引',
       icon: RefreshCw, group: '快捷动作',
       run: () => {
-        navigate('/knowledge')
+        navigate('/projects')
         setTimeout(() => window.dispatchEvent(new CustomEvent('flowforge:rebuild-index')), 80)
       },
     },

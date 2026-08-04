@@ -1,14 +1,16 @@
 // ================================================================
 //  commands/git_ops.rs — git plumbing + incremental indexing (Phase 5)
 //
-//  git2 (local-only, no network features):
-//    git_status / git_recent_commits / git_changed_files
-//
-//  System git CLI (network-capable, reuses the machine's credential
-//  helpers — git2 has no network features here):
+//  All git operations run on the bundled libgit2 (git2 crate) — the
+//  app needs no system git binary:
+//    git_status / git_recent_commits / git_changed_files   (local)
 //    git_clone / git_create_branch / git_checkout_branch /
-//    git_branch_list / git_push / git_check_available
-//  Always argv-based tokio::process::Command, never a shell.
+//    git_branch_list / git_push / git_check_available      (network)
+//
+//  Network auth: https only; tokens are handed to libgit2 via the
+//  credentials callback and never touch URLs, .git/config or logs.
+//  Anything that can reach logs/events/errors still passes through
+//  redact_credentials() as defense in depth.
 //
 //  Incremental indexing:
 //    code_index_incremental compares the stored file mtimes (and records
@@ -24,15 +26,11 @@
 // ================================================================
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-use tokio::io::AsyncReadExt;
 
 use notify::{EventKind, RecursiveMode, Watcher};
 use rusqlite::Connection;
@@ -425,18 +423,17 @@ pub fn stats_for(repo: &Path) -> Result<IndexStats, String> {
   index_stats(&index_db_path(repo))
 }
 
-// ─── System git CLI (clone/branch/push via `git`, no shell) ─────
+// ─── Built-in git runtime (clone/branch/push via libgit2) ──────
 
 const CLONE_PROGRESS_THROTTLE_MS: u64 = 200;
 
 // ─── Token auth (per-host git credentials from Settings) ───────
 //
-// Command-level URL injection: when the frontend supplies a GitAuth,
-// the token is spliced into the http(s) URL for that single argv only.
-// After a clone the origin remote is reset to the clean URL so the
-// token never lands in .git/config; push always targets the tokened
-// URL directly and never rewrites the remote. Everything that can
-// reach logs/events/errors passes through redact_credentials().
+// Credentials-callback injection: when the frontend supplies a GitAuth,
+// the token is handed to libgit2 through the credentials callback for
+// http(s) transports only. It never appears in any URL, .git/config,
+// event payload or error text; redact_credentials() below remains as
+// defense in depth for anything that can still reach logs/events.
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -445,39 +442,35 @@ pub struct GitAuth {
   pub token: String,
 }
 
-/// Percent-encodes a URL userinfo component (RFC 3986: only unreserved
-/// characters pass through, everything else becomes %XX).
-fn encode_userinfo(raw: &str) -> String {
-  let mut out = String::with_capacity(raw.len());
-  for b in raw.bytes() {
-    match b {
-      b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
-      _ => out.push_str(&format!("%{b:02X}")),
-    }
-  }
-  out
+fn is_http_url(url: &str) -> bool {
+  url.starts_with("https://") || url.starts_with("http://")
 }
 
-/// `http(s)://host/path` → `http(s)://{user}:{token}@host/path` (username
-/// defaults to `oauth2`, both parts URL-encoded); pre-existing userinfo is
-/// replaced. Non-http(s) URLs (ssh, local paths) return None so callers
-/// fall back to the system credential helpers untouched.
-fn inject_url_auth(url: &str, auth: &GitAuth) -> Option<String> {
-  let (scheme, rest) = if let Some(r) = url.strip_prefix("https://") {
-    ("https", r)
-  } else if let Some(r) = url.strip_prefix("http://") {
-    ("http", r)
-  } else {
-    return None;
-  };
-  // drop any userinfo already present (only valid before the first '/')
-  let authority_len = rest.find('/').unwrap_or(rest.len());
-  let rest = match rest[..authority_len].rfind('@') {
-    Some(at) => &rest[at + 1..],
-    None => rest,
-  };
-  let user = auth.username.as_deref().map(str::trim).filter(|u| !u.is_empty()).unwrap_or("oauth2");
-  Some(format!("{scheme}://{}:{}@{rest}", encode_userinfo(user), encode_userinfo(&auth.token)))
+/// Username for https token auth: explicit config wins, else `oauth2`
+/// (the GitLab/GitHub token convention).
+fn auth_username(auth: &GitAuth) -> String {
+  auth
+    .username
+    .as_deref()
+    .map(str::trim)
+    .filter(|u| !u.is_empty())
+    .unwrap_or("oauth2")
+    .to_string()
+}
+
+/// Attaches the token credentials callback when `auth` applies to the
+/// transport. Returns an owned AuthBundle so the callback closure stays
+/// 'static for spawn_blocking.
+struct AuthBundle {
+  username: String,
+  token: String,
+}
+
+fn auth_bundle(url: &str, auth: Option<&GitAuth>) -> Option<AuthBundle> {
+  auth.filter(|_| is_http_url(url)).map(|a| AuthBundle {
+    username: auth_username(a),
+    token: a.token.clone(),
+  })
 }
 
 /// Scrubs URL userinfo from any text bound for logs, events or error
@@ -528,64 +521,18 @@ pub struct GitCloneResult {
   pub already_cloned: bool,
 }
 
-/// Runs `git` with plain argv (never through a shell) and waits for output.
-async fn run_git<I, S>(args: I) -> Result<std::process::Output, String>
-where
-  I: IntoIterator<Item = S>,
-  S: AsRef<OsStr>,
-{
-  tokio::process::Command::new("git")
-    .args(args)
-    .stdin(Stdio::null())
-    .output()
-    .await
-    .map_err(|e| format!("git not available: {e}"))
-}
-
-/// Maps a failed exit to the unified `{code}: {message}` error shape.
-fn expect_success(out: &std::process::Output, code: &str) -> Result<String, String> {
-  if out.status.success() {
-    return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
-  }
-  let stderr = String::from_utf8_lossy(&out.stderr);
-  let msg = stderr.trim();
-  let msg = if msg.is_empty() { "unknown git error" } else { msg };
-  Err(format!("{code}: {}", redact_credentials(msg)))
-}
-
 pub async fn check_git_available() -> GitAvailability {
-  match run_git(["--version"]).await {
-    Ok(out) if out.status.success() => GitAvailability {
-      available: true,
-      version: Some(String::from_utf8_lossy(&out.stdout).trim().to_string()),
-    },
-    _ => GitAvailability { available: false, version: None },
+  // Built-in libgit2 — always available, no system git required.
+  let (maj, min, rev) = git2::Version::get().libgit2_version();
+  GitAvailability {
+    available: true,
+    version: Some(format!("git version built-in (libgit2 {maj}.{min}.{rev})")),
   }
 }
 
-/// `git -C <dir> rev-parse --git-dir` succeeds ⇒ dir is inside a work tree.
-async fn is_git_repo(dir: &Path) -> bool {
-  let args: [&OsStr; 4] = [
-    "-C".as_ref(),
-    dir.as_os_str(),
-    "rev-parse".as_ref(),
-    "--git-dir".as_ref(),
-  ];
-  matches!(run_git(args).await, Ok(out) if out.status.success())
-}
-
-/// Percent out of progress lines like `Receiving objects:  42% (…)`.
-fn parse_progress_percent(line: &str) -> Option<u8> {
-  let idx = line.find('%')?;
-  let digits: Vec<char> = line[..idx]
-    .chars()
-    .rev()
-    .take_while(|c| c.is_ascii_digit())
-    .collect();
-  if digits.is_empty() {
-    return None;
-  }
-  digits.iter().rev().collect::<String>().parse().ok()
+/// `git2::Repository::discover` succeeds ⇒ dir is inside a work tree.
+fn is_git_repo(dir: &Path) -> bool {
+  git2::Repository::discover(dir).is_ok()
 }
 
 fn clone_progress_payload(
@@ -604,9 +551,36 @@ fn clone_progress_payload(
   })
 }
 
-/// Clones via the system git CLI. Idempotent: an existing valid repo at
-/// `target_dir` short-circuits to success. Progress lines arrive on stderr
-/// (CR-rewritten, hence the CR/LF split) and flow through `emit`, throttled.
+/// Checks out `branch` (existing local branch, or a new local branch
+/// tracking `origin/<branch>`), pointing HEAD at it — the libgit2
+/// equivalent of `git clone --branch` / `git checkout <branch>`.
+fn checkout_named_branch(repo: &git2::Repository, branch: &str) -> Result<(), String> {
+  let local_ref = format!("refs/heads/{branch}");
+  if repo.find_reference(&local_ref).is_err() {
+    let remote_ref = format!("refs/remotes/origin/{branch}");
+    let obj = repo
+      .revparse_single(&remote_ref)
+      .map_err(|_| format!("branch `{branch}` not found locally or on origin"))?;
+    let commit = obj.peel_to_commit().map_err(|e| e.to_string())?;
+    repo.branch(branch, &commit, false).map_err(|e| e.to_string())?;
+  }
+  repo.set_head(&local_ref).map_err(|e| e.to_string())?;
+  // safe checkout — refuses to clobber local modifications, like git
+  repo.checkout_head(None).map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+fn attach_credentials<'cb>(cb: &mut git2::RemoteCallbacks<'cb>, bundle: Option<AuthBundle>) {
+  if let Some(b) = bundle {
+    cb.credentials(move |_url, _user_from_url, _allowed| {
+      git2::Cred::userpass_plaintext(&b.username, &b.token)
+    });
+  }
+}
+
+/// Clones via the bundled libgit2. Idempotent: an existing valid repo at
+/// `target_dir` short-circuits to success. Progress flows through `emit`
+/// (throttled), mapped from the transfer-progress callback.
 pub async fn clone_repo<F>(
   repo_url: &str,
   target_dir: &str,
@@ -615,88 +589,80 @@ pub async fn clone_repo<F>(
   emit: F,
 ) -> Result<GitCloneResult, String>
 where
-  F: Fn(serde_json::Value),
+  F: Fn(serde_json::Value) + Send + 'static,
 {
   let target = PathBuf::from(target_dir);
-  if target.exists() && is_git_repo(&target).await {
+  if target.exists() && is_git_repo(&target) {
     emit(clone_progress_payload(repo_url, target_dir, "done", Some(100), "already cloned"));
     return Ok(GitCloneResult { repo_path: target_dir.to_string(), already_cloned: true });
   }
 
-  // token lives in this argv only; payloads/errors keep the clean URL
-  let effective_url = auth.and_then(|a| inject_url_auth(repo_url, a));
-  let token_used = effective_url.is_some();
-  let effective_url = effective_url.unwrap_or_else(|| repo_url.to_string());
+  let url = repo_url.to_string();
+  let dir = target_dir.to_string();
+  let branch = branch.map(String::from);
+  let bundle = auth_bundle(repo_url, auth);
 
-  let mut cmd = tokio::process::Command::new("git");
-  cmd.arg("clone").arg("--progress");
-  if let Some(b) = branch {
-    cmd.arg("--branch").arg(b);
-  }
-  cmd.arg("--").arg(&effective_url).arg(&target);
-  cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
-  let mut child = cmd.spawn().map_err(|e| format!("git not available: {e}"))?;
+  tokio::task::spawn_blocking(move || {
+    let emit = Arc::new(emit);
+    emit(clone_progress_payload(&url, &dir, "progress", Some(0), "connecting…"));
 
-  let mut stderr = child
-    .stderr
-    .take()
-    .ok_or_else(|| "git clone failed: stderr unavailable".to_string())?;
-  let mut buf = [0u8; 4096];
-  let mut pending: Vec<u8> = Vec::new();
-  let mut tail: Vec<String> = Vec::new(); // last lines feed the error message
-  let mut last_emit = Instant::now() - Duration::from_millis(CLONE_PROGRESS_THROTTLE_MS);
-  loop {
-    let n = stderr
-      .read(&mut buf)
-      .await
-      .map_err(|e| format!("git clone failed: {e}"))?;
-    if n == 0 {
-      break;
+    let mut fo = git2::FetchOptions::new();
+    {
+      let mut cb = git2::RemoteCallbacks::new();
+      attach_credentials(&mut cb, bundle);
+      // throttled object-transfer progress
+      let emit_p = Arc::clone(&emit);
+      let url_p = url.clone();
+      let dir_p = dir.clone();
+      let last = Arc::new(Mutex::new(
+        Instant::now() - Duration::from_millis(CLONE_PROGRESS_THROTTLE_MS),
+      ));
+      let last_p = Arc::clone(&last);
+      cb.transfer_progress(move |stats| {
+        let mut g = last_p.lock().unwrap();
+        if g.elapsed() >= Duration::from_millis(CLONE_PROGRESS_THROTTLE_MS) {
+          *g = Instant::now();
+          let percent = if stats.total_objects() > 0 {
+            Some(((stats.received_objects() * 100 / stats.total_objects()) as u8).min(99))
+          } else {
+            None
+          };
+          let line = format!(
+            "receiving objects: {}/{} ({} bytes)",
+            stats.received_objects(),
+            stats.total_objects(),
+            stats.received_bytes()
+          );
+          emit_p(clone_progress_payload(&url_p, &dir_p, "progress", percent, &line));
+        }
+        true
+      });
+      fo.remote_callbacks(cb);
     }
-    pending.extend_from_slice(&buf[..n]);
-    while let Some(pos) = pending.iter().position(|b| *b == b'\r' || *b == b'\n') {
-      let raw: Vec<u8> = pending.drain(..=pos).collect();
-      // redact before the line can reach events or the error tail
-      let line = redact_credentials(String::from_utf8_lossy(&raw[..raw.len() - 1]).trim());
-      if line.is_empty() {
-        continue;
+
+    let mut builder = git2::build::RepoBuilder::new();
+    builder.fetch_options(fo);
+    let repo = match builder.clone(&url, &target) {
+      Ok(r) => r,
+      Err(e) => {
+        // drop the partial checkout, mirroring the git CLI behavior
+        std::fs::remove_dir_all(&target).ok();
+        return Err(format!("git clone failed: {}", redact_credentials(&e.to_string())));
       }
-      tail.push(line.clone());
-      if tail.len() > 8 {
-        tail.remove(0);
-      }
-      if last_emit.elapsed() >= Duration::from_millis(CLONE_PROGRESS_THROTTLE_MS) {
-        last_emit = Instant::now();
-        emit(clone_progress_payload(
-          repo_url,
-          target_dir,
-          "progress",
-          parse_progress_percent(&line),
-          &line,
-        ));
+    };
+
+    if let Some(b) = branch {
+      if let Err(e) = checkout_named_branch(&repo, &b) {
+        std::fs::remove_dir_all(&target).ok();
+        return Err(format!("git clone failed: {e}"));
       }
     }
-  }
 
-  let status = child.wait().await.map_err(|e| format!("git clone failed: {e}"))?;
-  if !status.success() {
-    return Err(redact_credentials(&format!("git clone failed: {}", tail.join(" | "))));
-  }
-  if token_used {
-    // reset origin to the clean URL so the token never lands in .git/config
-    let args: [&OsStr; 6] = [
-      "-C".as_ref(),
-      target.as_os_str(),
-      "remote".as_ref(),
-      "set-url".as_ref(),
-      "origin".as_ref(),
-      repo_url.as_ref(),
-    ];
-    let out = run_git(args).await?;
-    expect_success(&out, "git remote set-url failed")?;
-  }
-  emit(clone_progress_payload(repo_url, target_dir, "done", Some(100), "clone complete"));
-  Ok(GitCloneResult { repo_path: target_dir.to_string(), already_cloned: false })
+    emit(clone_progress_payload(&url, &dir, "done", Some(100), "clone complete"));
+    Ok(GitCloneResult { repo_path: dir, already_cloned: false })
+  })
+  .await
+  .map_err(|e| format!("git clone failed: {e}"))?
 }
 
 pub async fn create_branch(
@@ -704,113 +670,117 @@ pub async fn create_branch(
   new_branch: &str,
   base: Option<&str>,
 ) -> Result<(), String> {
-  let mut args: Vec<&OsStr> = vec![
-    "-C".as_ref(),
-    repo_path.as_os_str(),
-    "branch".as_ref(),
-    "--".as_ref(),
-    new_branch.as_ref(),
-  ];
-  if let Some(b) = base {
-    args.push(b.as_ref());
-  }
-  let out = run_git(args).await?;
-  expect_success(&out, "git branch failed").map(|_| ())
+  let repo_path = repo_path.to_path_buf();
+  let new_branch = new_branch.to_string();
+  let base = base.map(String::from);
+  tokio::task::spawn_blocking(move || {
+    let repo = git2::Repository::discover(&repo_path)
+      .map_err(|e| format!("git branch failed: not a git repository: {e}"))?;
+    let target_commit = match base {
+      Some(b) => repo
+        .revparse_single(&b)
+        .and_then(|o| o.peel_to_commit())
+        .map_err(|e| format!("git branch failed: bad base `{b}`: {e}"))?,
+      None => repo
+        .head()
+        .and_then(|h| h.peel_to_commit())
+        .map_err(|e| format!("git branch failed: {e}"))?,
+    };
+    repo
+      .branch(&new_branch, &target_commit, false)
+      .map_err(|e| format!("git branch failed: {e}"))?;
+    Ok(())
+  })
+  .await
+  .map_err(|e| format!("git branch failed: {e}"))?
 }
 
 pub async fn checkout_branch(repo_path: &Path, branch: &str) -> Result<(), String> {
-  // trailing `--` pins <branch> as a rev, never a pathspec
-  let args: [&OsStr; 5] = [
-    "-C".as_ref(),
-    repo_path.as_os_str(),
-    "checkout".as_ref(),
-    branch.as_ref(),
-    "--".as_ref(),
-  ];
-  let out = run_git(args).await?;
-  expect_success(&out, "git checkout failed").map(|_| ())
+  let repo_path = repo_path.to_path_buf();
+  let branch = branch.to_string();
+  tokio::task::spawn_blocking(move || {
+    let repo = git2::Repository::discover(&repo_path)
+      .map_err(|e| format!("git checkout failed: not a git repository: {e}"))?;
+    checkout_named_branch(&repo, &branch).map_err(|e| format!("git checkout failed: {e}"))
+  })
+  .await
+  .map_err(|e| format!("git checkout failed: {e}"))?
 }
 
 pub async fn branch_list(repo_path: &Path) -> Result<GitBranchList, String> {
-  let args: [&OsStr; 5] = [
-    "-C".as_ref(),
-    repo_path.as_os_str(),
-    "branch".as_ref(),
-    "-a".as_ref(),
-    "--format=%(refname)".as_ref(),
-  ];
-  let out = run_git(args).await?;
-  let stdout = expect_success(&out, "git branch failed")?;
-  let mut local = vec![];
-  let mut remote = vec![];
-  for line in stdout.lines() {
-    let r = line.trim();
-    if let Some(name) = r.strip_prefix("refs/heads/") {
-      local.push(name.to_string());
-    } else if let Some(name) = r.strip_prefix("refs/remotes/") {
-      if !name.ends_with("/HEAD") {
-        remote.push(name.to_string());
+  let repo_path = repo_path.to_path_buf();
+  tokio::task::spawn_blocking(move || {
+    let repo = git2::Repository::discover(&repo_path)
+      .map_err(|e| format!("git branch failed: not a git repository: {e}"))?;
+    let mut local = vec![];
+    let mut remote = vec![];
+    let refs = repo.references().map_err(|e| format!("git branch failed: {e}"))?;
+    for r in refs.flatten() {
+      let name = r.name().unwrap_or("");
+      if let Some(n) = name.strip_prefix("refs/heads/") {
+        local.push(n.to_string());
+      } else if let Some(n) = name.strip_prefix("refs/remotes/") {
+        if !n.ends_with("/HEAD") {
+          remote.push(n.to_string());
+        }
       }
     }
-  }
-  let cur_args: [&OsStr; 4] = [
-    "-C".as_ref(),
-    repo_path.as_os_str(),
-    "branch".as_ref(),
-    "--show-current".as_ref(),
-  ];
-  let cur_out = run_git(cur_args).await?;
-  let current = expect_success(&cur_out, "git branch failed")?.trim().to_string();
-  let current = if current.is_empty() { None } else { Some(current) }; // detached HEAD → None
-  Ok(GitBranchList { local, remote, current })
+    // detached HEAD → None, matching `git branch --show-current`
+    let current = repo
+      .head()
+      .ok()
+      .filter(|h| h.is_branch())
+      .and_then(|h| h.shorthand().map(String::from));
+    Ok(GitBranchList { local, remote, current })
+  })
+  .await
+  .map_err(|e| format!("git branch failed: {e}"))?
 }
 
-/// Explicit-only push: `git push -u origin <branch>`. Summary is on stderr.
-/// With a GitAuth and an http(s) origin the push targets the tokened URL
-/// directly (`git push <url> <branch>`, no `-u`, remote untouched); ssh or
-/// local origins ignore the token and keep the system credential path.
+/// Explicit-only push: pushes `refs/heads/<branch>` to origin and sets
+/// the upstream (the `-u` equivalent). With a GitAuth and an http(s)
+/// origin the token goes through the credentials callback — remote URL
+/// and .git/config stay clean; non-http(s) origins push unauthenticated.
 pub async fn push_branch(repo_path: &Path, branch: &str, auth: Option<&GitAuth>) -> Result<String, String> {
-  if let Some(a) = auth {
-    let url_args: [&OsStr; 5] = [
-      "-C".as_ref(),
-      repo_path.as_os_str(),
-      "remote".as_ref(),
-      "get-url".as_ref(),
-      "origin".as_ref(),
-    ];
-    let out = run_git(url_args).await?;
-    let origin = expect_success(&out, "git push failed")?.trim().to_string();
-    if let Some(authed) = inject_url_auth(&origin, a) {
-      let args: [&OsStr; 5] = [
-        "-C".as_ref(),
-        repo_path.as_os_str(),
-        "push".as_ref(),
-        authed.as_ref(),
-        branch.as_ref(),
-      ];
-      let out = run_git(args).await?;
-      return if out.status.success() {
-        Ok(redact_credentials(String::from_utf8_lossy(&out.stderr).trim()))
-      } else {
-        expect_success(&out, "git push failed").map(|_| String::new())
-      };
+  let repo_path = repo_path.to_path_buf();
+  let branch = branch.to_string();
+  let auth = auth.cloned();
+  tokio::task::spawn_blocking(move || {
+    let repo = git2::Repository::discover(&repo_path)
+      .map_err(|e| format!("git push failed: not a git repository: {e}"))?;
+    let mut remote = repo
+      .find_remote("origin")
+      .map_err(|_| "git push failed: no `origin` remote configured".to_string())?;
+    let url = remote.url().unwrap_or_default().to_string();
+    let bundle = auth.as_ref().and_then(|a| auth_bundle(&url, Some(a)));
+
+    let mut cb = git2::RemoteCallbacks::new();
+    attach_credentials(&mut cb, bundle);
+    let mut opts = git2::PushOptions::new();
+    opts.remote_callbacks(cb);
+
+    let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
+    remote
+      .push(&[refspec.as_str()], Some(&mut opts))
+      .map_err(|e| format!("git push failed: {}", redact_credentials(&e.to_string())))?;
+
+    // `-u` equivalent: refresh the local remote-tracking ref and record
+    // origin/<branch> as the upstream
+    if let Ok(oid) = repo.refname_to_id(&format!("refs/heads/{branch}")) {
+      let _ = repo.reference(
+        &format!("refs/remotes/origin/{branch}"),
+        oid,
+        true,
+        "flowforge push",
+      );
     }
-    // non-http(s) origin — fall through to the plain `-u origin` push
-  }
-  let args: [&OsStr; 6] = [
-    "-C".as_ref(),
-    repo_path.as_os_str(),
-    "push".as_ref(),
-    "-u".as_ref(),
-    "origin".as_ref(),
-    branch.as_ref(),
-  ];
-  let out = run_git(args).await?;
-  if out.status.success() {
-    Ok(redact_credentials(String::from_utf8_lossy(&out.stderr).trim()))
-  } else {
-    expect_success(&out, "git push failed").map(|_| String::new())
-  }
+    if let Ok(mut b) = repo.find_branch(&branch, git2::BranchType::Local) {
+      let _ = b.set_upstream(Some(&format!("origin/{branch}")));
+    }
+    Ok(format!("pushed refs/heads/{branch} to origin"))
+  })
+  .await
+  .map_err(|e| format!("git push failed: {e}"))?
 }
 
 #[tauri::command]
@@ -1099,10 +1069,11 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn check_available_reports_system_git() {
+  async fn check_available_reports_builtin_git() {
+    // built-in libgit2 — always available, no system git required
     let avail = check_git_available().await;
     assert!(avail.available);
-    assert!(avail.version.unwrap().starts_with("git version"));
+    assert!(avail.version.unwrap().contains("libgit2"));
   }
 
   #[tokio::test]
@@ -1186,10 +1157,20 @@ mod tests {
   }
 
   #[test]
-  fn progress_percent_parses_git_lines() {
-    assert_eq!(parse_progress_percent("Receiving objects:  42% (10/24)"), Some(42));
-    assert_eq!(parse_progress_percent("Resolving deltas: 100% (5/5), done."), Some(100));
-    assert_eq!(parse_progress_percent("Cloning into 'x'..."), None);
+  fn auth_bundle_applies_to_http_urls_only() {
+    let auth = fake_auth(None, "glpat-FAKE123");
+    // username defaults to oauth2 (GitLab/GitHub token convention)
+    let b = auth_bundle("https://gitlab.example.com/grp/repo.git", Some(&auth)).unwrap();
+    assert_eq!(b.username, "oauth2");
+    assert_eq!(b.token, "glpat-FAKE123");
+    // explicit username + http scheme both work
+    let b2 = auth_bundle("http://git.corp:8443/r.git", Some(&fake_auth(Some("bot"), "tok"))).unwrap();
+    assert_eq!(b2.username, "bot");
+    // ssh / scp-like / local paths → no token (credentials callback skipped)
+    assert!(auth_bundle("git@github.com:org/repo.git", Some(&auth)).is_none());
+    assert!(auth_bundle("ssh://git@host/repo.git", Some(&auth)).is_none());
+    assert!(auth_bundle("/tmp/local/repo", Some(&auth)).is_none());
+    assert!(auth_bundle("https://host/r.git", None).is_none());
   }
 
   // ─── validate_local_repo (本地目录引用校验) ────────────────
@@ -1271,40 +1252,6 @@ mod tests {
   }
 
   #[test]
-  fn inject_url_auth_rewrites_http_urls_only() {
-    let auth = fake_auth(None, "glpat-FAKE123");
-    // username defaults to oauth2
-    assert_eq!(
-      inject_url_auth("http://gitlab.example.com/grp/repo.git", &auth).as_deref(),
-      Some("http://oauth2:glpat-FAKE123@gitlab.example.com/grp/repo.git")
-    );
-    // https + explicit username + port survive
-    let auth2 = fake_auth(Some("bot"), "tok");
-    assert_eq!(
-      inject_url_auth("https://git.corp:8443/r.git", &auth2).as_deref(),
-      Some("https://bot:tok@git.corp:8443/r.git")
-    );
-    // pre-existing userinfo is replaced, never doubled
-    assert_eq!(
-      inject_url_auth("https://old:cred@host/r.git", &auth2).as_deref(),
-      Some("https://bot:tok@host/r.git")
-    );
-    // ssh / scp-like / local paths → None (system credential helper path)
-    assert_eq!(inject_url_auth("git@github.com:org/repo.git", &auth), None);
-    assert_eq!(inject_url_auth("ssh://git@host/repo.git", &auth), None);
-    assert_eq!(inject_url_auth("/tmp/local/repo", &auth), None);
-  }
-
-  #[test]
-  fn inject_url_auth_percent_encodes_userinfo() {
-    let auth = fake_auth(Some("user@corp"), "a:b/c%d");
-    assert_eq!(
-      inject_url_auth("https://host/r.git", &auth).as_deref(),
-      Some("https://user%40corp:a%3Ab%2Fc%25d@host/r.git")
-    );
-  }
-
-  #[test]
   fn redact_credentials_strips_userinfo_everywhere() {
     assert_eq!(
       redact_credentials("fatal: unable to access 'http://oauth2:glpat-FAKE@host/r.git/': timeout"),
@@ -1374,11 +1321,22 @@ mod tests {
     let config = std::fs::read_to_string(target.join(".git/config")).unwrap();
     assert!(!config.contains("glpat-FAKE123"), "token must never land in .git/config");
 
-    // push with auth on a file-path origin falls back to `-u origin` (no
-    // upstream configured for main here → -u push against the source works)
+    // push with auth against a bare-repo origin succeeds locally and
+    // records the upstream (the `-u` equivalent); the token never leaks
+    let bare = std::env::temp_dir().join(format!("flowforge-gitcli-authbare-{}.git", now_ms()));
+    git2::Repository::init_bare(&bare).unwrap();
+    {
+      let repo = git2::Repository::discover(&target).unwrap();
+      repo.remote_set_url("origin", &bare.to_string_lossy()).unwrap();
+    }
     create_branch(&target, "feature/auth", None).await.unwrap();
     let out = push_branch(&target, "feature/auth", Some(&auth)).await.unwrap();
     assert!(!out.contains("glpat-FAKE123"));
+    assert!(out.contains("feature/auth"), "{out}");
+    // upstream got recorded like `git push -u`
+    let repo = git2::Repository::discover(&target).unwrap();
+    let b = repo.find_branch("feature/auth", git2::BranchType::Local).unwrap();
+    assert_eq!(b.upstream().unwrap().name().unwrap(), Some("origin/feature/auth"));
 
     // push with auth but no origin remote → unified error, token-free
     let lone = make_cli_repo("auth-lone");
@@ -1386,7 +1344,7 @@ mod tests {
     assert!(err.starts_with("git push failed:"), "{err}");
     assert!(!err.contains("glpat-FAKE123"), "{err}");
 
-    for d in [&src, &target, &lone] {
+    for d in [&src, &target, &lone, &bare] {
       std::fs::remove_dir_all(d).ok();
     }
   }

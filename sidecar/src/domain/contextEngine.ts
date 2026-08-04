@@ -5,8 +5,10 @@
 //    1. 交付背景        project name + requirement
 //    2. 上游交付物      direct-upstream deliverables from graph state
 //    3. 知识库召回      knowledge recall (safeRecall — silent no-op when unarmed)
-//    4. 阶段检查清单    quality checklist from domain/stages.ts
-//    5. 历史反思        reflection assets recalled from the knowledge layer
+//    4. 代码结构上下文  engine B graph: structural search + trace impact
+//       + cross-service edges (missing index ⇒ explicit error, no degrade)
+//    5. 阶段检查清单    quality checklist from domain/stages.ts
+//    6. 历史反思        reflection assets recalled from the knowledge layer
 //
 //  Packages larger than 10KB are spilled to
 //  `${FLOWFORGE_DATA_DIR || ~/.flowforge}/context/` — the in-process
@@ -20,6 +22,7 @@ import path from 'node:path'
 import { getStageDefinition } from '../domain/stages.js'
 import { safeRecall, type StageRecall } from '../knowledge/knowledgeService.js'
 import { codeSearch, type CodeSearchHit } from '../knowledge/codeSearch.js'
+import { getGraphEngine, resolveProjectName } from '../graph/graphEngine.js'
 import { recordRecall } from './flywheel.js'
 
 export const SPILL_THRESHOLD_BYTES = 10 * 1024
@@ -59,8 +62,19 @@ export interface ContextPackageResult {
   size: number
   upstream: UpstreamEntry[]
   knowledge: StageRecall | null
-  /** Code-index hits injected for this stage (null: index unavailable). */
+  /** Code-index hits injected for this stage (null: no repoPath). */
   code: CodeSearchHit[] | null
+  /** Engine B code intelligence (structural search / traces / cross-service). */
+  codeIntel: CodeIntelligence | null
+}
+
+export interface CodeIntelligence {
+  /** 相关模块（引擎 B 结构搜索）— rendered markdown lines. */
+  graphHits: string[]
+  /** 调用链影响面（dev/review/auto-test 阶段）。 */
+  traces: string[]
+  /** 跨服务调用关系（CROSS_* 边）。 */
+  crossEdges: string[]
 }
 
 // ─── Code context injection (Phase 5) ───────────────────────
@@ -85,8 +99,141 @@ export function codeQueryForStage(stageId: string, requirement: string): string 
   return [requirement.trim(), keywords].filter(Boolean).join(' ')
 }
 
-/** Code-index recall that never throws — missing index/db ⇒ null. */
-async function safeCodeSearch(
+/** Extract code-like symbols (camelCase / PascalCase / snake_case) from text. */
+export function extractSymbols(text: string): string[] {
+  const found = text.match(/[A-Za-z_$][A-Za-z0-9_$]{3,}/g) ?? []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const tok of found) {
+    if (seen.has(tok)) continue
+    seen.add(tok)
+    if (/(_|[a-z0-9][A-Z]|[A-Z][a-z0-9]+[A-Z])/.test(tok)) out.push(tok)
+  }
+  return out
+}
+
+/** Normalize search_code results into markdown bullet lines. */
+function searchHitsToLines(res: unknown): string[] {
+  if (!res) return []
+  const anyRes = res as any
+  const arr = Array.isArray(res)
+    ? res
+    : anyRes.matches ?? anyRes.results ?? anyRes.hits ?? []
+  if (!Array.isArray(arr)) {
+    const text = String(res).trim()
+    return text ? text.split('\n').slice(0, 8).map((l) => `- ${l.trim()}`) : []
+  }
+  return arr
+    .slice(0, 8)
+    .map((h: any) => {
+      if (typeof h === 'string') return `- ${h}`
+      const file = h.file ?? h.path ?? h.location?.file ?? ''
+      const line = h.line ?? h.startLine ?? h.location?.line ?? ''
+      const name = h.name ?? h.symbol ?? ''
+      const snippet = String(h.snippet ?? h.content ?? h.text ?? '').trim().split('\n')[0]?.slice(0, 120) ?? ''
+      const parts = [
+        file ? `\`${file}${line ? `:${line}` : ''}\`` : '',
+        name ? `**${name}**` : '',
+        snippet,
+      ].filter(Boolean)
+      return parts.length > 0 ? `- ${parts.join(' — ')}` : ''
+    })
+    .filter(Boolean)
+}
+
+/**
+ * Engine B structural search for the stage. No silent degradation:
+ * engine unavailable / no hits ⇒ throw, so the caller prompts the user
+ * to build the code index first.
+ */
+async function codeSearchForStage(
+  repoPath: string,
+  stageId: string,
+  requirement: string
+): Promise<string[]> {
+  const project = await resolveProjectName(undefined, repoPath)
+  if (!project) throw new Error('无法解析代码图谱项目，请先在项目配置中完成代码索引')
+  const symbols = extractSymbols(requirement)
+  const pattern = symbols[0] ?? codeQueryForStage(stageId, requirement).split(/\s+/).slice(0, 3).join(' ')
+  const res = await getGraphEngine().call('search_code', {
+    project,
+    pattern,
+    mode: 'compact',
+    limit: 8,
+  })
+  const hits = searchHitsToLines(res)
+  if (hits.length === 0) {
+    throw new Error('代码图谱无匹配结果，请先在项目配置中完成代码索引')
+  }
+  return hits
+}
+
+/** Normalize a trace_path result for one symbol into readable lines. */
+function traceToLines(sym: string, res: unknown): string[] {
+  if (!res) return []
+  if (typeof res === 'string') {
+    return res.trim().split('\n').slice(0, 4).map((l) => `- ${sym}: ${l.trim()}`).filter(Boolean)
+  }
+  const obj = res as any
+  const chain = obj.path ?? obj.calls ?? obj.chain ?? obj.nodes
+  if (Array.isArray(chain) && chain.length > 0) {
+    const names = chain.map((n: any) => (typeof n === 'string' ? n : n?.name ?? n?.function ?? n?.label ?? '?'))
+    return [`- ${sym} 调用链：${names.join(' → ')}`]
+  }
+  return []
+}
+
+/** Call-chain impact for dev/review/auto-test stages (symbol-driven). */
+async function traceContextForStage(
+  repoPath: string,
+  stageId: string,
+  requirement: string
+): Promise<string[]> {
+  if (!['dev', 'review', 'auto-test'].includes(stageId)) return []
+  const symbols = extractSymbols(requirement).slice(0, 3)
+  if (symbols.length === 0) return []
+  const project = await resolveProjectName(undefined, repoPath)
+  if (!project) return []
+  const lines: string[] = []
+  for (const sym of symbols) {
+    try {
+      const res = await getGraphEngine().call('trace_path', {
+        project,
+        function_name: sym,
+        direction: 'both',
+        depth: 2,
+        mode: 'calls',
+      })
+      lines.push(...traceToLines(sym, res))
+    } catch { /* symbol has no call chain in the graph — skip */ }
+  }
+  return [...new Set(lines)].slice(0, 12)
+}
+
+/** Cross-service call edges (CROSS_HTTP_CALLS / CROSS_ASYNC_CALLS / CROSS_CHANNEL). */
+async function crossRepoContext(repoPath: string): Promise<string[]> {
+  const project = await resolveProjectName(undefined, repoPath)
+  if (!project) return []
+  try {
+    const res = await getGraphEngine().call('query_graph', {
+      project,
+      query: "MATCH (a)-[r]->(b) WHERE type(r) STARTS WITH 'CROSS_' RETURN a.name AS source, type(r) AS rel, b.name AS target LIMIT 20",
+      max_rows: 20,
+    })
+    const rows = Array.isArray(res) ? res : (res as any)?.rows ?? (res as any)?.results ?? []
+    if (!Array.isArray(rows)) return []
+    return rows
+      .slice(0, 20)
+      .map((row: any) => (row?.rel ? `- ${row.rel}: ${row.source ?? '?'} → ${row.target ?? '?'}` : ''))
+      .filter(Boolean)
+  } catch {
+    // no CROSS_* edges (single-repo projects) is a normal state, not an error
+    return []
+  }
+}
+
+/** Engine A BM25 keyword search — supplemental retrieval next to engine B. */
+async function keywordCodeSearch(
   repoPath: string | undefined,
   stageId: string,
   requirement: string
@@ -100,8 +247,27 @@ async function safeCodeSearch(
     })
     return results.length > 0 ? results : null
   } catch {
-    return null // code index unavailable — stage execution must not care
+    return null // engine A index not built — engine B already reports clearly
   }
+}
+
+/**
+ * Full code-intelligence section for the context package.
+ * Engine B is the primary path: unavailable/no-hit ⇒ throws (user must
+ * build the index); traces/cross-edges are additive enrichments.
+ */
+async function collectCodeIntelligence(
+  repoPath: string | undefined,
+  stageId: string,
+  requirement: string
+): Promise<CodeIntelligence | null> {
+  if (!repoPath) return null
+  const graphHits = await codeSearchForStage(repoPath, stageId, requirement) // throws when unindexed
+  const [traces, crossEdges] = await Promise.all([
+    traceContextForStage(repoPath, stageId, requirement),
+    crossRepoContext(repoPath),
+  ])
+  return { graphHits, traces, crossEdges }
 }
 
 // ─── Assembly ───────────────────────────────────────────────────
@@ -126,8 +292,9 @@ export function renderContextMarkdown(input: {
   upstream: UpstreamEntry[]
   knowledge: StageRecall | null
   code?: CodeSearchHit[] | null
+  codeIntel?: CodeIntelligence | null
 }): string {
-  const { stageId, projectName, requirement, upstream, knowledge, code } = input
+  const { stageId, projectName, requirement, upstream, knowledge, code, codeIntel } = input
   const stageDef = getStageDefinition(stageId)
   const stageName = stageDef?.name || stageId
   const lines: string[] = []
@@ -155,9 +322,24 @@ export function renderContextMarkdown(input: {
     lines.push('')
   }
 
-  // 代码上下文（Phase 5）—— 索引不可用时整节静默省略
+  // 代码结构上下文（引擎 B 图谱：结构搜索 + 调用链 + 跨服务）
+  if (codeIntel) {
+    lines.push('## 代码结构上下文', '')
+    lines.push('### 相关模块（结构搜索）', '')
+    lines.push(...codeIntel.graphHits, '')
+    if (codeIntel.traces.length > 0) {
+      lines.push('### 调用链影响面', '')
+      lines.push(...codeIntel.traces, '')
+    }
+    if (codeIntel.crossEdges.length > 0) {
+      lines.push('### 跨服务调用', '')
+      lines.push(...codeIntel.crossEdges, '')
+    }
+  }
+
+  // 引擎 A 关键词补充命中（有则展示）
   if (code && code.length > 0) {
-    lines.push('## 相关代码', '')
+    lines.push('## 相关代码（关键词命中）', '')
     for (const hit of code) {
       const sig = hit.signature ? `：\`${hit.signature.slice(0, 120)}\`` : ''
       lines.push(`- \`${hit.file}:${hit.startLine}\` ${hit.kind} **${hit.name}**${sig}`)
@@ -220,12 +402,14 @@ export async function buildContextPackage(input: ContextPackageInput): Promise<C
       || knowledge.relatedAssets.length > 0
       || knowledge.reflections.length > 0)
   }
-  const code = await safeCodeSearch(input.repoPath, stageId, requirement)
+  const code = await keywordCodeSearch(input.repoPath, stageId, requirement)
+  // 引擎 B 代码智能：图谱未建/无匹配时直接报错，提示用户先建立索引
+  const codeIntel = await collectCodeIntelligence(input.repoPath, stageId, requirement)
 
-  const markdown = renderContextMarkdown({ stageId, projectName, requirement, upstream, knowledge, code })
+  const markdown = renderContextMarkdown({ stageId, projectName, requirement, upstream, knowledge, code, codeIntel })
   const size = Buffer.byteLength(markdown, 'utf8')
 
-  const result: ContextPackageResult = { markdown, size, upstream, knowledge, code }
+  const result: ContextPackageResult = { markdown, size, upstream, knowledge, code, codeIntel }
   if (size > SPILL_THRESHOLD_BYTES) {
     const dir = contextDir(input.dataDir)
     fs.mkdirSync(dir, { recursive: true })

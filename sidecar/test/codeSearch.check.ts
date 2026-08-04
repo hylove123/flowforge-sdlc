@@ -7,7 +7,8 @@
 //    3. hybrid merge: vector hits boost/append, backend flips to hybrid
 //    4. vector timeout (>200ms budget) and vector error → BM25 fallback
 //    5. registerCodeModules: batch entities + IMPLEMENTS edges
-//    6. contextEngine code-context injection + silent skip
+//    6. contextEngine code intelligence: engine B mandatory (no degrade),
+//       unavailable graph engine rejects; skipped only without repoPath
 // ================================================================
 
 import { test, afterEach } from 'node:test'
@@ -31,6 +32,7 @@ import {
 } from '../src/knowledge/knowledgeService.js'
 import { createFakeEmbedder } from '../src/knowledge/vectorStore.js'
 import { buildContextPackage, codeQueryForStage } from '../src/domain/contextEngine.js'
+import { getGraphEngine, resetGraphEngine } from '../src/graph/graphEngine.js'
 
 // ─── Fixture index db (schema mirror of commands/code_index.rs) ─
 
@@ -108,8 +110,9 @@ function makeFixtureIndex(tag: string): { repoPath: string; dbPath: string } {
   return { repoPath, dbPath }
 }
 
-afterEach(() => {
+afterEach(async () => {
   resetKnowledge()
+  await resetGraphEngine()
   delete process.env.FLOWFORGE_DATA_DIR
   for (const dir of tmpDirs) fs.rmSync(dir, { recursive: true, force: true })
   tmpDirs = []
@@ -252,37 +255,32 @@ test('code.register_modules RPC reads file modules from the index db', async () 
   assert.equal(result.edges, 0, 'no deliverable in the project → no IMPLEMENTS edges')
 })
 
-// ─── 6. contextEngine injection ─────────────────────────────────
+// ─── 6. contextEngine code intelligence (engine B, no degrade) ─
 
-test('buildContextPackage injects 相关代码 when the index is available', async () => {
+test('buildContextPackage rejects when engine B is unavailable (no degrade)', async () => {
   const { repoPath } = makeFixtureIndex('ctx')
-  const result = await buildContextPackage({
-    projectId: 'p1', deliveryId: 'd1', stageId: 'dev-plan',
-    repoPath,
-    state: { contextPackage: { projectName: 'Demo', requirement: 'getUserById 改造' }, deliverables: {} },
-  })
-  assert.ok(result.code && result.code.length > 0, 'code hits expected')
-  assert.match(result.markdown!, /## 相关代码/)
-  assert.match(result.markdown!, /getUserById/)
+  // force engine B spawn to fail fast: fake binary exits immediately
+  getGraphEngine().configure({ command: process.execPath, args: ['-e', 'process.exit(1)'] })
+  await assert.rejects(
+    () => buildContextPackage({
+      projectId: 'p1', deliveryId: 'd1', stageId: 'dev-plan',
+      repoPath,
+      state: { contextPackage: { projectName: 'Demo', requirement: 'getUserById 改造' }, deliverables: {} },
+    }),
+    /图谱引擎|代码图谱无匹配结果/
+  )
 })
 
-test('buildContextPackage silently skips code context without repoPath/index', async () => {
-  // no repoPath at all
+test('buildContextPackage skips code intelligence without repoPath', async () => {
+  // no repoPath at all → engine B not involved, no code sections
   const noRepo = await buildContextPackage({
     projectId: 'p1', deliveryId: 'd1', stageId: 'dev',
     state: { contextPackage: { projectName: 'Demo', requirement: 'X' }, deliverables: {} },
   })
   assert.equal(noRepo.code, null)
+  assert.equal(noRepo.codeIntel, null)
+  assert.ok(!noRepo.markdown!.includes('## 代码结构上下文'))
   assert.ok(!noRepo.markdown!.includes('## 相关代码'))
-
-  // repoPath given but no index db behind it
-  const missingIdx = await buildContextPackage({
-    projectId: 'p1', deliveryId: 'd1', stageId: 'dev',
-    repoPath: makeTmpDir('ctx-empty'),
-    state: { contextPackage: { projectName: 'Demo', requirement: 'X' }, deliverables: {} },
-  })
-  assert.equal(missingIdx.code, null)
-  assert.ok(!missingIdx.markdown!.includes('## 相关代码'))
 })
 
 test('codeQueryForStage maps stages to query strategies', () => {

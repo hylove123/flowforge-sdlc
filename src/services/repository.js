@@ -2,12 +2,11 @@
  * Repository Service — manages project code repositories
  * Supports local paths, git clone, and microservice multi-repo setups
  *
- * Dual runtime:
- *   - tauri: real git via Rust commands (git_clone / git_create_branch / ...)
- *   - web:   mock behavior kept intact (protects Playwright e2e)
+ * Pure client platform: real git via Rust commands
+ * (git_clone / git_create_branch / ...)
  */
 
-import { storage, detectRuntimeMode } from '@/adapters/StorageService'
+import { storage } from '@/adapters/StorageService'
 import { buildGitAuthForUrl } from '@/services/gitCredentials'
 import { invoke as tauriInvoke } from '@tauri-apps/api/core'
 import { listen as tauriListen } from '@tauri-apps/api/event'
@@ -95,6 +94,19 @@ export function deleteRepository(id) {
 }
 
 /**
+ * Cascade cleanup: drop every repository record of a project
+ * (used when a project is removed from the project center).
+ * @returns {number} number of removed records
+ */
+export function removeRepositoriesForProject(projectId) {
+  const all = getRepositories()
+  const remaining = all.filter(r => r.projectId !== projectId)
+  const removed = all.length - remaining.length
+  if (removed > 0) saveRepositories(remaining)
+  return removed
+}
+
+/**
  * Default clone target: appDataDir()/repos/{projectId}/{repoName}
  * Cross-platform via @tauri-apps/api path module (no hardcoded /workspace).
  */
@@ -105,13 +117,9 @@ export async function getDefaultCloneDir(repo) {
 
 /**
  * Validate a local directory for direct reference.
- *   - tauri: Rust `validate_local_repo` → {exists, isDirectory, isGitRepo, gitRoot?, currentBranch?}
- *   - web:   mock (always a valid git dir) so Playwright flows stay intact
+ * Rust `validate_local_repo` → {exists, isDirectory, isGitRepo, gitRoot?, currentBranch?}
  */
 export async function validateLocalRepo(path) {
-  if (detectRuntimeMode() !== 'tauri') {
-    return { exists: true, isDirectory: true, isGitRepo: true, gitRoot: path, currentBranch: 'main' }
-  }
   return tauriInvoke('validate_local_repo', { path })
 }
 
@@ -144,36 +152,15 @@ export async function registerLocalRepository({ projectId, name, path, isMain = 
 }
 
 /**
- * Clone a git repository.
- *   - tauri: invoke `git_clone`, streaming progress through the
- *     `git://clone_progress` event to the optional onProgress callback.
- *     A custom local path on the repo record takes precedence over the
- *     default appDataDir()-based target.
- *   - web: keep the mock behavior unchanged.
+ * Clone a git repository. Invokes `git_clone`, streaming progress
+ * through the `git://clone_progress` event to the optional onProgress
+ * callback. A custom local path on the repo record takes precedence
+ * over the default appDataDir()-based target.
  * @param {object} repo repository record
  * @param {(p: {phase: string, percent: number|null, line: string}) => void} [onProgress]
  */
 export async function cloneRepository(repo, onProgress) {
-  if (detectRuntimeMode() === 'tauri') {
-    return cloneRepositoryTauri(repo, onProgress)
-  }
-
-  updateRepository(repo.id, { status: 'cloning', error: null })
-
-  // Simulate network delay
-  await new Promise(resolve => setTimeout(resolve, 1500))
-
-  // Simulate success (in production, actual git clone would happen server-side)
-  const localPath = `/workspace/projects/${repo.projectId}/${repo.name}`
-  const updated = updateRepository(repo.id, {
-    status: 'ready',
-    path: localPath,
-    source: 'clone',
-    lastSync: new Date().toISOString(),
-    error: null,
-  })
-
-  return updated
+  return cloneRepositoryTauri(repo, onProgress)
 }
 
 async function cloneRepositoryTauri(repo, onProgress) {
@@ -215,25 +202,20 @@ async function cloneRepositoryTauri(repo, onProgress) {
   }
 }
 
-// ─── Branch services (tauri: real git · web: harmless mocks) ────
+// ─── Branch services (real git via the Rust shell) ──────────────
 
 /** Create a branch without switching HEAD. */
 export async function createBranch(repoPath, newBranch, base) {
-  if (detectRuntimeMode() !== 'tauri') return true
   return tauriInvoke('git_create_branch', { repoPath, newBranch, base: base || null })
 }
 
 /** Checkout an existing branch. */
 export async function checkoutBranch(repoPath, branch) {
-  if (detectRuntimeMode() !== 'tauri') return true
   return tauriInvoke('git_checkout_branch', { repoPath, branch })
 }
 
 /** List local/remote branches and the current one. */
 export async function listBranches(repoPath) {
-  if (detectRuntimeMode() !== 'tauri') {
-    return { local: ['main'], remote: [], current: 'main' }
-  }
   return tauriInvoke('git_branch_list', { repoPath })
 }
 
@@ -243,13 +225,11 @@ export async function listBranches(repoPath) {
  * Rust side pushes to the tokened URL without touching the remote.
  */
 export async function pushBranch(repoPath, branch, gitUrl) {
-  if (detectRuntimeMode() !== 'tauri') return `mock: pushed ${branch}`
   return tauriInvoke('git_push', { repoPath, branch, auth: buildGitAuthForUrl(gitUrl) })
 }
 
 /** Probe whether a git binary is available on this machine. */
 export async function checkGitAvailable() {
-  if (detectRuntimeMode() !== 'tauri') return { available: false, version: null }
   return tauriInvoke('git_check_available')
 }
 

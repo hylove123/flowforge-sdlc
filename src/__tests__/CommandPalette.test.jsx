@@ -86,7 +86,7 @@ describe('CommandPalette', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/projects')
   })
 
-  it('runs a quick action by click (重建索引 → /knowledge + CustomEvent)', async () => {
+  it('runs a quick action by click (重建索引 → /projects + CustomEvent)', async () => {
     vi.useFakeTimers()
     try {
       const listener = vi.fn()
@@ -95,7 +95,7 @@ describe('CommandPalette', () => {
       openPalette()
 
       fireEvent.click(screen.getByText('重建索引'))
-      expect(mockNavigate).toHaveBeenCalledWith('/knowledge')
+      expect(mockNavigate).toHaveBeenCalledWith('/projects')
       // CustomEvent dispatch is deferred so the target page can mount first
       vi.advanceTimersByTime(100)
       expect(listener).toHaveBeenCalledTimes(1)

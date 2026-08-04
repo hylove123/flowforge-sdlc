@@ -27,8 +27,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "resources": {
-      "../sidecar/dist": "sidecar/dist"
+      "../sidecar/dist": "sidecar/dist",
+      "bin/node": "bin/node"
     },
     "icon": [
       "icons/32x32.png",
@@ -39,6 +41,14 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/hylove123/flowforge-sdlc/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZGNTI5OTBGQjdCNUM1NQpSV1JWWEh2N2tDbjFEeElQM0JPOGNDSXRWM0gvdU5UVHVXQWF1eEYrQzBZemhGUjZtVlNYZXk1OQo="
     }
   }
 }

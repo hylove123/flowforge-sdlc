@@ -8,15 +8,7 @@ import {
 import { useApp } from '@/context/AppContext'
 import { useSidecar } from '@/context/SidecarContext'
 import { toMcpServerConfig } from '@/services/mcpConfig'
-
-const MODEL_OPTIONS = [
-  'GPT-4o',
-  'Claude 3.5 Sonnet',
-  'DeepSeek V3',
-  'GPT-4o-mini',
-  'Claude 3 Opus',
-  'GPT-3.5 Turbo',
-]
+import { getModelOptions } from '@/services/ai'
 
 // ─── Helpers: normalize legacy string arrays to object arrays ───
 function normalizeItems(arr) {
@@ -34,7 +26,7 @@ function itemsToLegacy(items) {
 const EMPTY_FORM = {
   name: '',
   description: '',
-  model: 'GPT-4o',
+  model: '',
   systemPrompt: '',
   temperature: 0.7,
   skills: [],
@@ -115,7 +107,7 @@ export default function Agents() {
     setForm({
       name: agent.name || '',
       description: agent.description || '',
-      model: agent.model || MODEL_OPTIONS[0],
+      model: agent.model || '',
       systemPrompt: agent.systemPrompt || '',
       temperature: typeof agent.temperature === 'number' ? agent.temperature : 0.7,
       skills: normalizeItems(agent.skills),
@@ -275,7 +267,7 @@ export default function Agents() {
             id: `a${Date.now()}_${count}`,
             name: a.name,
             description: a.description || '',
-            model: a.model || 'GPT-4o',
+            model: a.model || '',
             systemPrompt: a.systemPrompt || '',
             temperature: typeof a.temperature === 'number' ? a.temperature : 0.7,
             skills: normalizeItems(a.skills),
@@ -312,7 +304,7 @@ export default function Agents() {
           id: `a${Date.now()}_${count}`,
           name: a.name,
           description: a.description || '',
-          model: a.model || 'GPT-4o',
+          model: a.model || '',
           systemPrompt: a.systemPrompt || '',
           temperature: typeof a.temperature === 'number' ? a.temperature : 0.7,
           skills: normalizeItems(a.skills),
@@ -609,7 +601,8 @@ export default function Agents() {
                 <div className="agent-form-row">
                   <label className="agent-form-label">模型</label>
                   <select className="select" value={form.model} onChange={e => setForm({ ...form, model: e.target.value })} style={{ width: '100%' }}>
-                    {MODEL_OPTIONS.map(m => <option key={m} value={m}>{m}</option>)}
+                    <option value="">使用默认模型</option>
+                    {getModelOptions().map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                   </select>
                 </div>
                 <div className="agent-form-row">

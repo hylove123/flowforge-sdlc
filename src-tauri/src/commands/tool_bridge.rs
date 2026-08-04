@@ -4,9 +4,12 @@
 //  delegate_dispatch(payload):
 //    1. writes the context package to the system clipboard
 //    2. optionally opens an external tool via URI scheme (cursor://, vscode://…)
-//    3. starts a notify watcher on the recycle dir; new/changed files are
+//    3. when toolId + repoPath are present: writes the context to
+//       {repoPath}/.flowforge/delegate-context.md and launches the local
+//       AI client (qoder/trae/cursor) with that file — opens the project
+//    4. starts a notify watcher on the recycle dir; new/changed files are
 //       debounced (2s) and pushed to the frontend as `delegate://received`
-//    4. a configurable timeout (default 30min) emits `delegate://timeout`
+//    5. a configurable timeout (default 30min) emits `delegate://timeout`
 //
 //  delegate_cancel(delegationId): stops the watcher for that delegation.
 //
@@ -50,6 +53,11 @@ pub struct DispatchPayload {
   /// Test seam: shorten the 30min timeout / 2s debounce.
   pub timeout_ms: Option<u64>,
   pub debounce_ms: Option<u64>,
+  /// Local AI client to open: "qoder" | "trae" | "cursor".
+  pub tool_id: Option<String>,
+  /// Project repo path — context is written to {repo}/.flowforge/delegate-context.md
+  /// and the tool opens the file (which also opens the project).
+  pub repo_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,6 +67,7 @@ pub struct DispatchResult {
   pub watch_dir: String,
   pub clipboard: bool,
   pub opened: bool,
+  pub tool_opened: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -83,6 +92,51 @@ fn read_preview(path: &Path) -> Option<String> {
     return None;
   }
   std::fs::read_to_string(path).ok()
+}
+
+// ─── Local AI client launch ──────────────────────────────────
+
+/// Resolve the tool CLI and open the context file (opening the file also
+/// opens the enclosing project in these editors). No silent degradation:
+/// CLI missing → macOS `open -a` fallback → explicit error otherwise.
+fn open_tool_with_context(tool_id: &str, context_file: &Path) -> Result<(), String> {
+  let bin = match tool_id {
+    "qoder" => "qoder",
+    "trae" => "trae",
+    "cursor" => "cursor",
+    _ => return Err(format!("不支持的外派工具: {tool_id}")),
+  };
+
+  // CLI availability check
+  let check = std::process::Command::new("which").arg(bin).output();
+  match check {
+    Ok(o) if o.status.success() => {
+      std::process::Command::new(bin)
+        .arg(context_file)
+        .spawn()
+        .map_err(|e| format!("启动 {bin} 失败: {e}"))?;
+      Ok(())
+    }
+    _ => {
+      #[cfg(target_os = "macos")]
+      {
+        let app_name = match tool_id {
+          "qoder" => "Qoder",
+          "trae" => "Trae",
+          "cursor" => "Cursor",
+          _ => unreachable!(),
+        };
+        std::process::Command::new("open")
+          .args(["-a", app_name])
+          .arg(context_file)
+          .spawn()
+          .map_err(|e| format!("启动 {app_name} 失败: {e}"))?;
+        return Ok(());
+      }
+      #[cfg(not(target_os = "macos"))]
+      Err(format!("{bin} CLI 未安装，请先在工具中安装命令行工具"))
+    }
+  }
 }
 
 // ─── Watch loop (AppHandle-free, cargo-testable) ─────────────────
@@ -260,7 +314,25 @@ pub fn delegate_dispatch(
     }
   }
 
-  // 3. watch the recycle dir until files settle / timeout / cancel
+  // 3. open the local AI client with the context file (project + context).
+  //    No degradation: if the tool cannot be launched, report the error.
+  let mut tool_opened = false;
+  if let Some(tool_id) = payload.tool_id.as_deref().filter(|s| !s.is_empty()) {
+    let repo_path = payload
+      .repo_path
+      .as_deref()
+      .filter(|s| !s.is_empty())
+      .ok_or_else(|| "缺少项目仓库路径，无法写入上下文文件".to_string())?;
+    let flowforge_dir = Path::new(repo_path).join(".flowforge");
+    std::fs::create_dir_all(&flowforge_dir).map_err(|e| format!("创建 .flowforge 目录失败: {e}"))?;
+    let context_file = flowforge_dir.join("delegate-context.md");
+    std::fs::write(&context_file, &payload.context)
+      .map_err(|e| format!("写入上下文文件失败: {e}"))?;
+    open_tool_with_context(tool_id, &context_file)?;
+    tool_opened = true;
+  }
+
+  // 4. watch the recycle dir until files settle / timeout / cancel
   let timeout = Duration::from_millis(payload.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS));
   let debounce = Duration::from_millis(payload.debounce_ms.unwrap_or(DEFAULT_DEBOUNCE_MS));
   spawn_watcher(
@@ -277,6 +349,7 @@ pub fn delegate_dispatch(
     watch_dir: watch_dir.to_string_lossy().into_owned(),
     clipboard,
     opened,
+    tool_opened,
   })
 }
 
