@@ -49,8 +49,13 @@ export async function downloadAndInstall(onProgress) {
       onProgress?.({ downloaded, total, percent: 100 })
     }
   })
-  // 安装完成 — 重启以启用新版本
-  await relaunch()
+  // 安装完成 — 重启以启用新版本；若重启被拦截（如旧包 ACL 缺 process 权限），
+  // 此时新版本已替换完成，提示用户手动重启即可。
+  try {
+    await relaunch()
+  } catch {
+    throw new Error('更新已安装完成，请手动重启 FlowForge 以启用新版本')
+  }
 }
 
 /** 把 updater 底层错误转为用户可读文案。 */
