@@ -9,6 +9,7 @@ import {
   hasProjectIndex, getProjectIndexStats, searchCodebase,
 } from '@/services/codebaseIndex'
 import { searchKnowledge, getKnowledgeStats } from '@/services/knowledge'
+import { streamChat, hasAPIKey, getActiveModel } from '@/services/ai'
 
 // ISO 时间 → 本地可读时间；无索引时显示「未索引」
 function formatIndexTime(iso) {
@@ -25,9 +26,9 @@ export default function KnowledgeBase() {
   const [activeTab, setActiveTab] = useState('chat')
   const { currentProject, currentUser, showToast } = useApp()
 
-  // 智能问答对话记录 — 尚未接入真实问答能力，初始为空（空态引导），
-  // 不再展示任何演示性预置问答
-  const [chatHistory] = useState([])
+  // 智能问答对话记录 — 已接入 RAG：知识图谱实体 + 代码检索命中 → LLM 流式回答
+  const [chatHistory, setChatHistory] = useState([])
+  const [asking, setAsking] = useState(false)
 
   // Knowledge graph state — 纯客户端：统一走 sidecar 知识层（SQLite WAL + 向量检索）
   const [kgQuery, setKgQuery] = useState('')
@@ -82,11 +83,80 @@ export default function KnowledgeBase() {
     setKgSearching(false)
   }
 
-  const handleSend = () => {
-    if (inputValue.trim()) {
-      // 诚实提示：智能问答尚未接入真实模型，不伪造回答
-      showToast('智能问答能力建设中，请先使用「代码图谱」与「代码搜索」检索项目知识', 'info')
-      setInputValue('')
+  /** 组装 RAG 上下文：知识图谱实体 + 代码检索命中（均尽力而为，失败不阻断）。 */
+  const gatherRagContext = async (q) => {
+    const sections = []
+    try {
+      const kg = await searchKnowledge(q, currentProject.id)
+      const entities = (kg || []).slice(0, 5)
+      if (entities.length > 0) {
+        sections.push('【项目知识图谱实体】\n' + entities.map(e =>
+          `- ${e.label}（${e.type}${e.stageId ? `，阶段 ${e.stageId}` : ''}）：${(e.snippet || '').slice(0, 200)}`
+        ).join('\n'))
+      }
+    } catch { /* 知识层不可用 → 跳过 */ }
+    try {
+      if (hasProjectIndex(currentProject.id)) {
+        const code = await searchCodebase(currentProject.id, q)
+        const hits = (code?.results || []).slice(0, 5)
+        if (hits.length > 0) {
+          sections.push('【代码检索命中】\n' + hits.map(h =>
+            `- \`${h.file}:${h.line}\`（${h.repo}）：${(h.snippet || '').slice(0, 150)}`
+          ).join('\n'))
+        }
+      }
+    } catch { /* 代码检索不可用 → 跳过 */ }
+    return sections
+  }
+
+  const handleSend = async (override) => {
+    const q = (override ?? inputValue).trim()
+    if (!q || asking) return
+    if (!hasAPIKey() || !getActiveModel()) {
+      showToast('请先在「模型管理」中添加并启用一个自定义模型', 'error')
+      return
+    }
+    setAsking(true)
+    setInputValue('')
+    const userMsg = { role: 'user', content: q }
+    const aiMsg = { role: 'ai', content: '' }
+    setChatHistory(prev => [...prev, userMsg, aiMsg])
+    const appendToLast = (patch) => setChatHistory(prev => {
+      const next = [...prev]
+      next[next.length - 1] = { ...next[next.length - 1], ...patch }
+      return next
+    })
+    try {
+      // RAG 上下文（尽力而为）
+      const sections = await gatherRagContext(q)
+      const contextBlock = sections.length > 0
+        ? `\n\n【项目上下文（检索自本项目知识库与代码索引，回答请优先基于以下事实）】\n${sections.join('\n\n')}`
+        : ''
+      const messages = [
+        {
+          role: 'system',
+          content: `你是 FlowForge 项目知识库问答助手，基于当前项目的知识图谱与代码索引回答问题。要求：回答专业、结构清晰（markdown）；引用代码时给出文件路径；上下文中没有的信息请如实说明。${contextBlock}`,
+        },
+        // 携带最近 6 轮历史
+        ...chatHistory.slice(-12).map(m => ({ role: m.role === 'ai' ? 'assistant' : 'user', content: m.content })),
+        { role: 'user', content: q },
+      ]
+      for await (const chunk of streamChat(messages, { temperature: 0.4 })) {
+        if (chunk.error) throw new Error(chunk.error)
+        if (chunk.content) {
+          setChatHistory(prev => {
+            const next = [...prev]
+            const last = next[next.length - 1]
+            next[next.length - 1] = { ...last, content: last.content + chunk.content }
+            return next
+          })
+        }
+      }
+    } catch (e) {
+      appendToLast({ content: `回答失败：${e?.message || e}` })
+      showToast(`智能问答失败：${e?.message || e}`, 'error')
+    } finally {
+      setAsking(false)
     }
   }
 
@@ -143,8 +213,8 @@ export default function KnowledgeBase() {
                     向项目知识库提问
                   </div>
                   <div style={{ fontSize: '12px', color: 'var(--fg-tertiary)', lineHeight: 1.7 }}>
-                    智能问答能力建设中，可先使用「代码图谱」与「代码搜索」检索项目知识，
-                    <br />或从右侧常见问题快速开始
+                    基于项目知识图谱与代码索引的 RAG 问答，
+                    <br />使用前请先在「模型管理」中配置并启用模型
                   </div>
                 </div>
               )}
@@ -194,8 +264,8 @@ export default function KnowledgeBase() {
                 onKeyDown={e => { if (e.key === 'Enter') handleSend() }}
                 style={{ flex: 1 }}
               />
-              <button className="btn btn-primary" onClick={handleSend} aria-label="发送">
-                <Send size={14} />
+              <button className="btn btn-primary" onClick={() => handleSend()} disabled={asking || !inputValue.trim()} aria-label="发送">
+                {asking ? <Loader2 size={14} className="ff-spin" /> : <Send size={14} />}
               </button>
             </div>
           </div>

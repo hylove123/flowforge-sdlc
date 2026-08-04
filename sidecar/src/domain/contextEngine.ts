@@ -75,6 +75,8 @@ export interface CodeIntelligence {
   traces: string[]
   /** 跨服务调用关系（CROSS_* 边）。 */
   crossEdges: string[]
+  /** 引擎不可用/无命中时的降级原因（渲染为提示而非报错）。 */
+  note?: string
 }
 
 // ─── Code context injection (Phase 5) ───────────────────────
@@ -96,7 +98,9 @@ const CODE_QUERY_KEYWORDS: Record<string, string> = {
 
 export function codeQueryForStage(stageId: string, requirement: string): string {
   const keywords = CODE_QUERY_KEYWORDS[stageId] ?? 'service module'
-  return [requirement.trim(), keywords].filter(Boolean).join(' ')
+  // 中文领域词的英文等价词一并入查询（BM25 对中文分词无效，靠等价词命中）
+  const domain = extractDomainTerms(requirement).join(' ')
+  return [requirement.trim(), domain, keywords].filter(Boolean).join(' ')
 }
 
 /** Extract code-like symbols (camelCase / PascalCase / snake_case) from text. */
@@ -112,6 +116,68 @@ export function extractSymbols(text: string): string[] {
   return out
 }
 
+// 领域词 → 代码标识符映射：纯中文需求 grep 零命中时，用领域词的
+// 英文等价物检索（WMS 仓储域优先，通用词兼顾）。宁缺毋滥：映射
+// 不到就不注入通用噪音词。
+const DOMAIN_TERM_MAP: Record<string, string[]> = {
+  入库: ['inbound', 'asn', 'putaway'],
+  出库: ['outbound', 'shipping', 'picking'],
+  收货: ['receive', 'inbound'],
+  上架: ['putaway'],
+  拣货: ['pick', 'picking'],
+  复核: ['check', 'recheck'],
+  打包: ['pack', 'packing'],
+  发货: ['ship', 'shipping'],
+  盘点: ['inventory', 'count', 'stocktake'],
+  库存: ['inventory', 'stock'],
+  条码: ['barcode'],
+  标签: ['label'],
+  打印: ['print'],
+  波次: ['wave'],
+  货位: ['location', 'bin'],
+  库位: ['location', 'bin'],
+  容器: ['container'],
+  单据: ['order', 'document'],
+  订单: ['order'],
+  退货: ['return'],
+  补货: ['replenish'],
+  调拨: ['transfer'],
+  分拣: ['sort', 'sorting'],
+  装载: ['load', 'loading'],
+  月台: ['dock'],
+  报表: ['report'],
+  权限: ['permission', 'auth'],
+  登录: ['login', 'auth'],
+}
+
+/** 从中文需求提取领域词的英文等价检索词（去重、保序）。 */
+export function extractDomainTerms(text: string): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const [zh, ens] of Object.entries(DOMAIN_TERM_MAP)) {
+    if (!text.includes(zh)) continue
+    for (const en of ens) {
+      if (!seen.has(en)) { seen.add(en); out.push(en) }
+    }
+  }
+  return out
+}
+
+// 结构搜索噪音路径：构建/配置/元数据文件与需求代码无关，命中即剔除
+const NOISE_PATH_PATTERNS = [
+  /(^|\/)pom\.xml/i,
+  /(^|\/)build\.gradle/i,
+  /\.qoder\//,
+  /repowiki/,
+  /(^|\/)package(-lock)?\.json$/,
+  /(^|\/)(vite|tailwind|postcss)\.config\./,
+]
+
+function isNoiseHit(h: any): boolean {
+  const file = String(h?.file ?? h?.path ?? '')
+  return NOISE_PATH_PATTERNS.some((re) => re.test(file))
+}
+
 /** Normalize search_code results into markdown bullet lines. */
 function searchHitsToLines(res: unknown): string[] {
   if (!res) return []
@@ -124,16 +190,22 @@ function searchHitsToLines(res: unknown): string[] {
     return text ? text.split('\n').slice(0, 8).map((l) => `- ${l.trim()}`) : []
   }
   return arr
+    .filter((h: any) => !isNoiseHit(h))
     .slice(0, 8)
     .map((h: any) => {
       if (typeof h === 'string') return `- ${h}`
       const file = h.file ?? h.path ?? h.location?.file ?? ''
-      const line = h.line ?? h.startLine ?? h.location?.line ?? ''
-      const name = h.name ?? h.symbol ?? ''
+      const line = h.start_line ?? h.line ?? h.startLine ?? h.location?.line ?? ''
+      // search_code 真实结构：qualified_name / label；兼容旧字段 name/symbol
+      const qualified = typeof h.qualified_name === 'string' ? h.qualified_name : ''
+      const shortName = qualified ? qualified.split('.').slice(-2).join('.') : ''
+      const name = h.name ?? h.symbol ?? shortName
+      const kind = h.label ?? h.kind ?? h.type ?? ''
       const snippet = String(h.snippet ?? h.content ?? h.text ?? '').trim().split('\n')[0]?.slice(0, 120) ?? ''
       const parts = [
         file ? `\`${file}${line ? `:${line}` : ''}\`` : '',
         name ? `**${name}**` : '',
+        kind ? `(${kind})` : '',
         snippet,
       ].filter(Boolean)
       return parts.length > 0 ? `- ${parts.join(' — ')}` : ''
@@ -142,30 +214,47 @@ function searchHitsToLines(res: unknown): string[] {
 }
 
 /**
- * Engine B structural search for the stage. No silent degradation:
- * engine unavailable / no hits ⇒ throw, so the caller prompts the user
- * to build the code index first.
+ * Engine B structural search for the stage. Harness 原则：检索增强是
+ * 锦上添花，不能阻断交付——中文需求往往提取不出代码符号，grep 零命中
+ * 是常态；只有图谱引擎本身不可用（项目未索引）才提示用户，其余情形
+ * 返回空列表降级继续。返回值 null = 引擎不可用（附原因），[] = 无命中。
  */
 async function codeSearchForStage(
   repoPath: string,
   stageId: string,
   requirement: string
-): Promise<string[]> {
+): Promise<{ hits: string[]; unavailable?: string }> {
   const project = await resolveProjectName(undefined, repoPath)
-  if (!project) throw new Error('无法解析代码图谱项目，请先在项目配置中完成代码索引')
+  if (!project) return { hits: [], unavailable: '无法解析图谱项目名，可先在项目配置中完成代码索引' }
+  // 查询策略（优先级从高到低）：
+  //   1. 需求中的代码符号（camelCase/snake_case）
+  //   2. 中文领域词的英文等价词（入库→inbound、条码→barcode…）
+  //   3. 实在无词可用才退回阶段关键词（噪音大，保底）
+  // 全部零命中则降级返回空（不报错）。
   const symbols = extractSymbols(requirement)
-  const pattern = symbols[0] ?? codeQueryForStage(stageId, requirement).split(/\s+/).slice(0, 3).join(' ')
-  const res = await getGraphEngine().call('search_code', {
-    project,
-    pattern,
-    mode: 'compact',
-    limit: 8,
-  })
-  const hits = searchHitsToLines(res)
-  if (hits.length === 0) {
-    throw new Error('代码图谱无匹配结果，请先在项目配置中完成代码索引')
+  const domainTerms = extractDomainTerms(requirement)
+  const candidates = symbols.length > 0
+    ? symbols.slice(0, 3)
+    : domainTerms.length > 0
+      ? domainTerms.slice(0, 4)
+      : codeQueryForStage(stageId, requirement).split(/\s+/).slice(0, 2)
+  for (const pattern of candidates) {
+    if (!pattern) continue
+    let res: unknown
+    try {
+      res = await getGraphEngine().call('search_code', {
+        project,
+        pattern,
+        mode: 'compact',
+        limit: 8,
+      })
+    } catch {
+      return { hits: [], unavailable: '图谱引擎不可用，可先在项目配置中完成代码索引' }
+    }
+    const hits = searchHitsToLines(res)
+    if (hits.length > 0) return { hits }
   }
-  return hits
+  return { hits: [] }
 }
 
 /** Normalize a trace_path result for one symbol into readable lines. */
@@ -253,8 +342,8 @@ async function keywordCodeSearch(
 
 /**
  * Full code-intelligence section for the context package.
- * Engine B is the primary path: unavailable/no-hit ⇒ throws (user must
- * build the index); traces/cross-edges are additive enrichments.
+ * 降级而非中断：引擎不可用/无命中 ⇒ 返回带 note 的空结果，
+ * 交付流程继续（harness：上下文缺失不应阻断交付）。
  */
 async function collectCodeIntelligence(
   repoPath: string | undefined,
@@ -262,12 +351,14 @@ async function collectCodeIntelligence(
   requirement: string
 ): Promise<CodeIntelligence | null> {
   if (!repoPath) return null
-  const graphHits = await codeSearchForStage(repoPath, stageId, requirement) // throws when unindexed
+  const { hits, unavailable } = await codeSearchForStage(repoPath, stageId, requirement)
   const [traces, crossEdges] = await Promise.all([
     traceContextForStage(repoPath, stageId, requirement),
     crossRepoContext(repoPath),
   ])
-  return { graphHits, traces, crossEdges }
+  const note = unavailable
+    ?? (hits.length === 0 ? '图谱未命中相关代码（需求可能无直接代码符号），以下仅提供调用链与跨服务信息' : undefined)
+  return { graphHits: hits, traces, crossEdges, note }
 }
 
 // ─── Assembly ───────────────────────────────────────────────────
@@ -325,8 +416,13 @@ export function renderContextMarkdown(input: {
   // 代码结构上下文（引擎 B 图谱：结构搜索 + 调用链 + 跨服务）
   if (codeIntel) {
     lines.push('## 代码结构上下文', '')
+    if (codeIntel.note) lines.push(`> 说明：${codeIntel.note}`, '')
     lines.push('### 相关模块（结构搜索）', '')
-    lines.push(...codeIntel.graphHits, '')
+    if (codeIntel.graphHits.length > 0) {
+      lines.push(...codeIntel.graphHits, '')
+    } else {
+      lines.push('（本次未命中，可在项目配置中重建代码索引以提升命中率）', '')
+    }
     if (codeIntel.traces.length > 0) {
       lines.push('### 调用链影响面', '')
       lines.push(...codeIntel.traces, '')
@@ -403,7 +499,7 @@ export async function buildContextPackage(input: ContextPackageInput): Promise<C
       || knowledge.reflections.length > 0)
   }
   const code = await keywordCodeSearch(input.repoPath, stageId, requirement)
-  // 引擎 B 代码智能：图谱未建/无匹配时直接报错，提示用户先建立索引
+  // 引擎 B 代码智能：不可用/无命中时降级（note 标注），不阻断交付
   const codeIntel = await collectCodeIntelligence(input.repoPath, stageId, requirement)
 
   const markdown = renderContextMarkdown({ stageId, projectName, requirement, upstream, knowledge, code, codeIntel })

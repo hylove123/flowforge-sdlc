@@ -397,19 +397,26 @@ export function reciprocalRankFusion(lists, k = 60) {
   return [...acc.values()].sort((a, b) => b.score - a.score)
 }
 
-/** 引擎 B（search_code compact）命中归一化为统一结构。 */
+/** 引擎 B（search_code compact）命中归一化为统一结构。
+ * search_code 真实字段：{ qualified_name, label, file, start_line, end_line, in_degree, match_lines }；
+ * name 取限定名末段，kind 取 label，不再用 'symbol' 占位。 */
 function normalizeGraphHits(res, repoName) {
   const list = Array.isArray(res) ? res : res?.results ?? res?.matches ?? []
   if (!Array.isArray(list)) return []
-  return list.map(h => ({
-    file: h.file ?? h.path ?? h.filePath ?? '',
-    line: h.line ?? h.start_line ?? h.startLine ?? 1,
-    name: h.name ?? h.symbol ?? h.function ?? '',
-    kind: h.kind ?? h.type ?? 'symbol',
-    signature: h.signature ?? h.declaration ?? '',
-    score: typeof h.score === 'number' ? h.score : 0,
-    repo: repoName,
-  }))
+  return list.map(h => {
+    const qualified = typeof h.qualified_name === 'string' ? h.qualified_name : ''
+    const shortName = qualified ? qualified.split('.').pop() : ''
+    return {
+      file: h.file ?? h.path ?? h.filePath ?? '',
+      line: h.start_line ?? h.line ?? h.startLine ?? 1,
+      endLine: h.end_line ?? h.endLine,
+      name: h.name ?? shortName ?? h.function ?? '',
+      kind: h.label ?? h.kind ?? h.type ?? '匹配',
+      signature: h.signature ?? h.declaration ?? '',
+      score: typeof h.score === 'number' ? h.score : 0,
+      repo: repoName,
+    }
+  })
 }
 
 /** Top 命中符号用引擎 B trace_path 增补调用方/被调方上下文（尽力而为，4s 上限）。 */
@@ -476,18 +483,25 @@ async function searchCodebaseTauri(projectId, query, stats) {
   ])
 
   const maxScore = Math.max(...fused.map(f => f.score), 1e-9)
-  let results = fused.slice(0, 8).map(({ item: h, sources }) => ({
-    file: h.file,
-    line: h.startLine ?? h.line ?? 1,
-    snippet: h.signature
+  let results = fused.slice(0, 8).map(({ item: h, sources }) => {
+    // 引擎 B 命中无 signature 时，退而展示命中行附近的代码上下文（raw_matches），
+    // 避免只显示 "kind name" 占位文本
+    const snippet = h.signature
       ? `${h.signature}  // L${h.startLine ?? h.line ?? 1}-${h.endLine ?? ''} · ${h.kind} ${h.name}`
-      : `${h.kind} ${h.name}`,
-    relevance: Math.max(0, Math.min(1, h.score != null && maxScore > 0 ? (sources.length > 1 ? 1 : 0.5 + 0.5 * ((h.score ?? 0) / (listA[0]?.score ?? 1))) : 0.5)),
-    repo: h.repo,
-    name: h.name,
-    kind: h.kind,
-    sources,
-  }))
+      : (h.content && String(h.content).trim()
+          ? String(h.content).trim().split('\n')[0].slice(0, 200)
+          : `${h.kind} ${h.name}`.trim())
+    return {
+      file: h.file,
+      line: h.startLine ?? h.line ?? 1,
+      snippet,
+      relevance: Math.max(0, Math.min(1, h.score != null && maxScore > 0 ? (sources.length > 1 ? 1 : 0.5 + 0.5 * ((h.score ?? 0) / (listA[0]?.score ?? 1))) : 0.5)),
+      repo: h.repo,
+      name: h.name,
+      kind: h.kind,
+      sources,
+    }
+  })
   results = results.slice(0, 5)
   await enrichWithTrace(results)
 

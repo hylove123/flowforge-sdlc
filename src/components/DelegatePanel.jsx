@@ -146,6 +146,10 @@ export default function DelegatePanel({
       setPreview(null)
       const toolLabel = TARGET_TOOLS.find(t => t.id === target)?.label || target
       showToast(`已打开 ${toolLabel} 并带入上下文，产出后请导入交付物或放入回收目录`, 'success')
+      // harness：代码智能降级时不阻断外派，但提示用户可提升上下文质量
+      if (typeof pack?.markdown === 'string' && pack.markdown.includes('> 说明：')) {
+        showToast('本次代码索引未命中或引擎不可用（已在上下文中降级标注），可在项目配置中完成代码索引提升质量', 'info')
+      }
     } catch (e) {
       showToast(`外派失败：${e?.message || e}`, 'error')
     } finally {
